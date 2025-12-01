@@ -369,19 +369,74 @@ export default class TopReelRenderer {
     this.currentAssets = assets;
     this.currentSymbols = symbols;
 
-    // Apply textures to visible symbols (first symbolCount symbols)
-    for (let i = 0; i < this.symbolCount && i < symbols.length && i < this.symbols.length; i++) {
-      const symbolCode = symbols[i];
-      const texture = assets.get(symbolCode);
-      const symbol = this.symbols[i];
+    // CRITICAL: Map backend symbols to sprites that will be visible at targetPosition
+    // Top reel scrolls horizontally (right to left), so we need to calculate which sprite
+    // will end up at each visible column position when the reel stops
+    
+    const symbolSpacing = this.reelWidth;
+    const totalSymbolWidth = this.symbols.length * symbolSpacing;
+    
+    // Use targetPosition if set, otherwise use current position
+    // Position is in pixels (negative for right-to-left scrolling)
+    const targetPos = Number.isFinite(this.targetPosition) ? this.targetPosition : this.position;
+    
+    // Normalize target position for wrapping (convert to [0, totalSymbolWidth) range)
+    let normalizedTargetPos = targetPos;
+    if (normalizedTargetPos < 0) {
+      normalizedTargetPos = (normalizedTargetPos % totalSymbolWidth + totalSymbolWidth) % totalSymbolWidth;
+    } else {
+      normalizedTargetPos = normalizedTargetPos % totalSymbolWidth;
+    }
+    
+    console.log(`[TopReelRenderer] preloadSpinResult: targetPos=${targetPos}, normalizedTargetPos=${normalizedTargetPos}, totalSymbolWidth=${totalSymbolWidth}`);
 
-      if (texture && symbol && !symbol.destroyed) {
-        symbol.texture = texture;
-        const scale = Math.min(
-          this.symbolSize / texture.width,
-          this.symbolSize / texture.height
-        );
-        symbol.scale.set(scale);
+    // Apply textures to sprites that will be visible at targetPosition
+    // Backend sends symbols in order: [col1, col2, col3, col4] for reels 1-4
+    // At targetPosition, we want:
+    // - symbols[0] to be at column 1 (leftmost visible, offset 3)
+    // - symbols[1] to be at column 2 (offset 2)
+    // - symbols[2] to be at column 3 (offset 1)
+    // - symbols[3] to be at column 4 (rightmost visible, offset 0)
+    
+    // From ticker: wrappedPos = ((normalizedPos + (i * symbolSpacing)) % totalSymbolWidth)
+    // symbolX = rightmostX - wrappedPos
+    // For visible index j (0-3), we want symbolX = rightmostX - (3 - j) * symbolSpacing
+    // So: wrappedPos = (3 - j) * symbolSpacing
+    // => (normalizedTargetPos + i * symbolSpacing) % totalSymbolWidth = (3 - j) * symbolSpacing
+    // => (normalizedTargetPos + i * symbolSpacing) = (3 - j) * symbolSpacing + k * totalSymbolWidth for some k
+    // => i * symbolSpacing = (3 - j) * symbolSpacing - normalizedTargetPos + k * totalSymbolWidth
+    // => i = (3 - j) - (normalizedTargetPos / symbolSpacing) + k * symbols.length
+    // => i = ((3 - j) - Math.floor(normalizedTargetPos / symbolSpacing) + symbols.length) % symbols.length
+    
+    for (let visibleIndex = 0; visibleIndex < this.symbolCount && visibleIndex < symbols.length; visibleIndex++) {
+      const symbolCode = symbols[visibleIndex];
+      if (!symbolCode || symbolCode === 'NULL') {
+        continue;
+      }
+
+      // Calculate sprite index that will be at this visible position
+      // visibleIndex 0 = leftmost (offset 3), visibleIndex 3 = rightmost (offset 0)
+      const targetOffset = this.symbolCount - 1 - visibleIndex; // 3, 2, 1, 0
+      
+      // Convert normalizedTargetPos from pixels to "symbol units"
+      const normalizedPosInUnits = Math.floor(normalizedTargetPos / symbolSpacing);
+      
+      // Formula: i = (targetOffset - normalizedPosInUnits + symbols.length) % symbols.length
+      let spriteIndex = (targetOffset - normalizedPosInUnits + this.symbols.length) % this.symbols.length;
+
+      const sprite = this.symbols[spriteIndex];
+      if (sprite && !sprite.destroyed) {
+        const texture = assets.get(symbolCode) ?? assets.get('PLACEHOLDER');
+        if (texture) {
+          const scale = Math.min(
+            this.symbolSize / texture.width,
+            this.symbolSize / texture.height
+          );
+          sprite.texture = texture;
+          sprite.scale.set(scale);
+          
+          console.log(`[TopReelRenderer] preloadSpinResult: Visible ${visibleIndex} (col ${this.coversReels[visibleIndex]}) -> Sprite ${spriteIndex}, Symbol ${symbolCode}, targetOffset=${targetOffset}, normalizedPosInUnits=${normalizedPosInUnits}`);
+        }
       }
     }
   }
