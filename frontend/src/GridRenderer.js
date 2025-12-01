@@ -426,6 +426,11 @@ export default class GridRenderer {
       this.container.addChild(this.topReelContainer);
     }
 
+    // --- FIX: Use FIXED height for reels based on maxRows ---
+    // This ensures the mask and spinning strip are always the size of the game window,
+    // preventing symbols from spinning "outside" the grid.
+    const fixedReelHeight = this.maxRows;
+
     // Build reels (one per column) with masking
     for (let i = 0; i < this.columns; i++) {
       const reelContainer = new PIXI.Container();
@@ -433,32 +438,20 @@ export default class GridRenderer {
       reelContainer.x = Math.round(i * this.reelWidth);
       reelContainer.y = 0; // Fixed Y position - never changes
 
-      // Get reel height (variable for Megaways, fixed otherwise)
-      const reelHeight = this.reelHeights && this.reelHeights[i] ? this.reelHeights[i] : this.rows;
       const hasTopReel = this.topReel && [1, 2, 3, 4].includes(i);
 
-      // Create mask to clip symbols to visible area
-      // Mask starts at symbolSize to hide the top buffer row
-      // IMPORTANT: For Megaways, mask must always be maxRows height to cover all possible reel heights
-      // The mask should be sized to the maximum possible height, not the current height
-      // IMPORTANT: Mask must be a child of the container being masked OR in the same parent
-      // We'll add it as a child of reelContainer so it's in local coordinates
+      // --- FIX: MASK HEIGHT IS NOW CONSTANT ---
+      // Always size the mask to maxRows, regardless of current spin result.
       const mask = new PIXI.Graphics();
       mask.beginFill(0xffffff);
-      const maskY = this.symbolSize; // Always start at symbolSize to hide buffer
-      // Use maxRows for mask height to ensure all symbols are properly clipped
-      // This ensures symbols never show outside the grid during spinning
-      const maskHeight = this.symbolSize * this.maxRows;
+      const maskY = this.symbolSize; // Always start at symbolSize to hide the top buffer row
+      const maskHeight = this.symbolSize * fixedReelHeight; // Fixed height
       mask.drawRect(0, maskY, this.reelWidth, maskHeight);
       mask.endFill();
-      // Position mask in local coordinates (relative to reelContainer)
+      
       mask.x = 0;
       mask.y = 0;
-      // CRITICAL: Add mask as child of reelContainer FIRST (before other children)
-      // This ensures the mask is in the correct coordinate space
       reelContainer.addChildAt(mask, 0);
-      // Set mask on reelContainer - this will clip all children (spinLayer, gridLayer)
-      // The mask property clips everything outside the mask rectangle
       reelContainer.mask = mask;
 
       // Ensure reel containers are added after table sprite so they render on top
@@ -478,7 +471,7 @@ export default class GridRenderer {
       const reel = {
         container: reelContainer,
         symbols: [],
-        gridSprites: new Array(reelHeight).fill(null),
+        gridSprites: [], // Will be populated dynamically based on result
         spinLayer,
         gridLayer,
         position: 0,
@@ -486,16 +479,14 @@ export default class GridRenderer {
         blur: blur,
         mask: mask,
         targetPosition: 0,
-        index: i, // Column index for mapping to result matrix
-        finalTexturesApplied: false, // Flag to track if final textures have been applied
-        height: reelHeight // Store reel height
+        index: i, 
+        finalTexturesApplied: false, 
+        height: fixedReelHeight // Fixed visual height
       };
 
-      // Build symbols for this reel
-      // CRITICAL: Create enough symbols to fill the visible area (maxRows) plus buffer for smooth looping
-      // We need maxRows + 2 symbols: maxRows visible + 1 buffer above + 1 buffer below
-      // This ensures smooth scrolling without gaps, but the mask will clip to only show maxRows
-      const symbolCount = this.maxRows + 2; // Enough for maxRows visible + buffers
+      // Build symbols for this reel - Fill the FIXED height + buffer
+      // This ensures the strip is always long enough to fill the view
+      const symbolCount = fixedReelHeight + 1;
       for (let j = 0; j < symbolCount; j++) {
         const texture = slotTextures[Math.floor(Math.random() * slotTextures.length)];
         const symbol = new PIXI.Sprite(texture);
@@ -505,11 +496,8 @@ export default class GridRenderer {
           this.symbolSize / symbol.texture.height
         );
         
-        // Position symbols using 0-based coordinate system
-        // Row 0 (bottom) should start at symbolSize (mask start) to align with visible area
-        // Symbols are positioned from symbolSize (visible start) upward
-        // The mask will clip anything outside [symbolSize, symbolSize + maxRows * symbolSize]
-        symbol.y = this.symbolSize + (j * this.symbolSize);
+        // Position symbols using standard spacing for spin
+        symbol.y = j * this.symbolSize;
         symbol.x = Math.round((this.reelWidth - symbol.width) / 2);
         
         reel.symbols.push(symbol);
@@ -614,19 +602,15 @@ export default class GridRenderer {
           if (!symbol || symbol.destroyed) continue;
 
           const prevy = symbol.y;
-          // Position symbols starting from symbolSize (mask start) to align with visible area
-          // Row 0 (bottom) is at symbolSize, row 1 is at 2*symbolSize, etc.
-          // The modulo loop handles wrapping for smooth scrolling
-          // Calculate position with wrapping, offset by symbolSize to align with mask
-          const baseY = this.symbolSize; // Start at mask start position
-          const symbolIndex = (reel.position + j) % reel.symbols.length;
-          const newY = baseY + symbolIndex * this.symbolSize;
+          // Standard spin logic - uses fixed symbolSize spacing
+          const newY = ((reel.position + j) % reel.symbols.length) * this.symbolSize;
           symbol.y = newY;
           
-          // CRITICAL: The mask will clip symbols outside the visible area
-          // We don't need to manually constrain positions here - the mask handles it
-          // The mask covers: [symbolSize, symbolSize + maxRows * symbolSize]
-          // Any symbol outside this range will be automatically clipped by the mask
+          // Bounds check
+          const maxY = (this.maxRows + 1) * this.symbolSize + this.symbolSize;
+          if (symbol.y < -this.symbolSize * 2 || symbol.y > maxY) {
+            symbol.y = ((symbol.y % maxY) + maxY) % maxY;
+          }
 
           // Update textures randomly during spin, but ONLY if final textures haven't been applied
           // Once resultMatrix is set, we should use final textures, not random ones
@@ -753,16 +737,30 @@ export default class GridRenderer {
     this.resultMatrix = null;
 
     // Build or rebuild reels if needed
-    // Rebuild if reel heights have changed or reels don't exist
-    const needsRebuild = this.reels.length === 0 || 
-      (this.reelHeights && this.reels.some((reel, i) => {
-        const expectedHeight = this.reelHeights[i] || this.rows;
-        return reel.height !== expectedHeight;
-      }));
-    
-    if (needsRebuild) {
-      console.log('[GridRenderer] startSpin: Building/rebuilding reels with current heights', this.reelHeights);
+    // --- FIX: Only rebuild if reels are missing, NOT if height changed ---
+    // We use a fixed height now (maxRows), so variable reelHeights don't trigger rebuilds.
+    // The mask is always maxRows, so we never need to rebuild based on reelHeights.
+    if (this.reels.length === 0) {
+      console.log('[GridRenderer] startSpin: Building reels (first time)');
       this.buildReels(assets);
+    }
+    
+    // CRITICAL: Ensure masks are still properly set (they should never change)
+    // Verify all reels have masks and they're the correct size
+    for (let i = 0; i < this.reels.length; i++) {
+      const reel = this.reels[i];
+      if (reel && reel.container && reel.mask) {
+        // Ensure mask is still set on container
+        if (reel.container.mask !== reel.mask) {
+          reel.container.mask = reel.mask;
+        }
+        // Verify mask height is correct (should always be maxRows * symbolSize)
+        const expectedMaskHeight = this.maxRows * this.symbolSize;
+        const currentMaskHeight = reel.mask.height || 0;
+        if (Math.abs(currentMaskHeight - expectedMaskHeight) > 1) {
+          console.warn(`[GridRenderer] startSpin: Reel ${i} mask height mismatch. Expected: ${expectedMaskHeight}, Got: ${currentMaskHeight}`);
+        }
+      }
     }
 
     this.enterSpinMode(); // Show spin layer, hide grid layer
@@ -1097,13 +1095,9 @@ export default class GridRenderer {
 
       const reelSymbolCount = reelSymbolsForColumn.length;
 
-      // --- CRITICAL FIX: DYNAMIC SIZING ---
-      // Calculate the height of the visible area for this reel
-      // We assume the reel container should fill the same height regardless of symbol count
+      // --- CRITICAL: DYNAMIC SIZING ---
+      // Use fixed maxRows for height calculation to keep within game window
       const totalReelPixelHeight = this.maxRows * this.symbolSize; 
-      
-      // Calculate height per symbol for THIS specific spin
-      // If we have 7 symbols, they must shrink to fit. If 2, they grow.
       const dynamicSymbolHeight = totalReelPixelHeight / reelSymbolCount;
       // -------------------------------------
 
@@ -1149,9 +1143,11 @@ export default class GridRenderer {
 
         // --- APPLY DYNAMIC SCALE ---
         // Scale sprite to fit the NEW dynamic height
-        const scaleX = (this.reelWidth) / texture.width;
-        const scaleY = (dynamicSymbolHeight) / texture.height;
-        // Use the smaller scale to fit within box, or scaleY to stretch/squash
+        // CRITICAL: We must ensure symbols fit within the fixed mask height
+        // The mask is always maxRows * symbolSize, so we scale to fit reelSymbolCount symbols in that space
+        const scaleX = (this.reelWidth * 0.95) / texture.width; // 95% to leave small gap
+        const scaleY = (dynamicSymbolHeight * 0.95) / texture.height; // 95% to prevent overlap
+        // Use the smaller scale to ensure it fits within both width and height constraints
         sprite.scale.set(Math.min(scaleX, scaleY)); 
         
         // Center horizontally
@@ -1164,26 +1160,31 @@ export default class GridRenderer {
         // For static grid with dynamic heights: y = symbolSize + row * dynamicSymbolHeight
         // This puts row 0 at bottom (y = symbolSize), row 1 above it, etc.
         
-        // Adjust for top reel offset if necessary
+        // --- FIX INVERSION AND MASK ALIGNMENT ---
+        // Backend Row 0 is BOTTOM. Frontend y=0 is TOP.
+        // We want Row 0 to appear at the bottom of the visible mask area.
+        // The mask starts at y = symbolSize and has height = maxRows * symbolSize
+        // So visible area is from symbolSize to symbolSize + maxRows * symbolSize
         const hasTopReel = this.topReel && [1, 2, 3, 4].includes(col);
         const topOffset = hasTopReel ? this.symbolSize : 0;
         
-        // Position: row 0 at bottom (symbolSize), row 1 above it, etc.
-        // With dynamic heights, we need to calculate cumulative height
-        // Row 0 (backend bottom) should be at the bottom of the visible reel
-        // Row N-1 (backend top) should be at the top
-        // Since we're using dynamic heights, we need to position from bottom up
-        let yPosition = this.symbolSize; // Start at mask offset (bottom of visible area)
-        // For row 0, y = symbolSize (bottom)
-        // For row 1, y = symbolSize + dynamicSymbolHeight
-        // For row N-1, y = symbolSize + (N-1) * dynamicSymbolHeight (top)
-        yPosition += row * dynamicSymbolHeight;
-        sprite.y = yPosition + topOffset;
+        // Position symbols within the mask area
+        // The mask covers from symbolSize to symbolSize + maxRows * symbolSize
+        // We need to fit reelSymbolCount symbols within this space
+        // Row 0 (bottom) should be at the bottom of the visible mask area
+        // Row N-1 (top) should be at the top of the visible mask area
+        const maskStart = this.symbolSize;
+        const maskHeight = this.maxRows * this.symbolSize;
         
-        // Debug: Log positioning for first and last row
-        if (row === 0 || row === reelSymbolCount - 1) {
-          console.log(`[GridRenderer] renderGridFromMatrix: Reel ${col}, Row ${row} positioned at y=${sprite.y} (topOffset=${topOffset})`);
-        }
+        // Calculate the total height needed for all symbols
+        const totalSymbolHeight = reelSymbolCount * dynamicSymbolHeight;
+        // If total height is less than mask height, center them vertically
+        // If total height equals mask height, start from maskStart
+        const verticalOffset = Math.max(0, (maskHeight - totalSymbolHeight) / 2);
+        
+        // Position: maskStart + offset + (reelSymbolCount - 1 - row) * dynamicSymbolHeight
+        // This ensures row 0 is at bottom, row N-1 is at top, all within the mask
+        sprite.y = maskStart + verticalOffset + ((reelSymbolCount - 1 - row) * dynamicSymbolHeight) + topOffset;
         
         sprite.visible = true;
         sprite.alpha = 1;
