@@ -1472,25 +1472,69 @@ export default class GridRenderer {
 
     // Apply final textures immediately to all reels when result is known
     // This ensures symbols are visible before the reels stop
-    // resultMatrix is already set above, so ticker won't overwrite these textures
+    // CRITICAL: Map backend results to the specific sprites that will end up inside the visible area at targetPosition
     console.log('[GridRenderer] preloadSpinResult: Applying textures to', this.columns, 'reels');
-    for (let col = 0; col < this.columns; col += 1) {
+    for (let col = 0; col < this.columns && col < reelSymbols.length; col += 1) {
       const reel = this.reels[col];
       if (!reel || !Array.isArray(reel.symbols) || reel.symbols.length === 0) {
         console.warn(`[GridRenderer] preloadSpinResult: Reel ${col} is invalid or has no symbols`);
         continue;
       }
 
-      // Apply textures immediately - don't wait for phase 0.9
-      console.log(`[GridRenderer] preloadSpinResult: Applying textures to reel ${col}`);
-      this._applyResultToReelSpinLayer(reel);
+      const symbolsForCol = reelSymbols[col]; // The final symbols for this column
+      if (!Array.isArray(symbolsForCol)) {
+        console.warn(`[GridRenderer] preloadSpinResult: Reel ${col} symbols is not an array`);
+        continue;
+      }
+
+      const reelHeight = symbolsForCol.length;
+      const symbolCount = reel.symbols.length; // Total sprites in the loop
+
+      // CRITICAL: Use targetPosition (where it will stop), not current position
+      const targetPos = Number.isFinite(reel.targetPosition) ? reel.targetPosition : reel.position;
+
+      console.log(`[GridRenderer] preloadSpinResult: Applying textures to reel ${col}, targetPos=${targetPos}, reelHeight=${reelHeight}`);
+
+      for (let row = 0; row < reelHeight; row += 1) {
+        const symbolCode = symbolsForCol[row];
+        
+        if (!symbolCode || symbolCode === 'NULL' || symbolCode === '') {
+          continue;
+        }
+
+        // Calculate which sprite index in the loop corresponds to this row at the target position
+        // Formula must match ticker's y-position logic: 
+        // y = symbolSize + ((position + j) % count) * symbolSize
+        // We want the sprite 'j' that lands at 'row'
+        // At targetPos: symbolSize + ((targetPos + j) % count) * symbolSize = symbolSize + row * symbolSize
+        // => ((targetPos + j) % count) = row
+        // => (targetPos + j) % count == row
+        // => j = (row - targetPos) % count
+        
+        // Handle negative modulo correctly
+        let spriteIndex = (row - Math.floor(targetPos)) % symbolCount;
+        if (spriteIndex < 0) spriteIndex += symbolCount;
+
+        const sprite = reel.symbols[spriteIndex];
+        
+        if (sprite && !sprite.destroyed) {
+          const texture = assets.get(symbolCode) ?? assets.get('PLACEHOLDER');
+          if (texture) {
+            // Reset scale to ensure it looks right immediately
+            const scale = Math.min(this.symbolSize / texture.width, this.symbolSize / texture.height);
+            sprite.texture = texture;
+            sprite.scale.set(scale);
+            sprite.x = Math.round((this.reelWidth - sprite.width) / 2);
+            
+            console.log(`[GridRenderer] preloadSpinResult: Reel ${col}, Row ${row} -> Sprite ${spriteIndex}, Symbol ${symbolCode}`);
+          }
+        }
+      }
+      
       reel.finalTexturesApplied = true;
       
       // Log what symbols were applied to this reel (for debugging)
-      const reelSymbolsForLog = reelSymbols[col];
-      if (Array.isArray(reelSymbolsForLog)) {
-        console.log(`[GridRenderer] preloadSpinResult: Reel ${col} (height ${reelSymbolsForLog.length}) should show (bottom to top):`, reelSymbolsForLog);
-      }
+      console.log(`[GridRenderer] preloadSpinResult: Reel ${col} (height ${reelHeight}) should show (bottom to top):`, symbolsForCol);
     }
     
     // Apply final textures to top reel symbols immediately

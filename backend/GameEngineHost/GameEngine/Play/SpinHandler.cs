@@ -109,8 +109,31 @@ public sealed class SpinHandler
         while (true)
         {
             var reelSymbolsBefore = board.GetReelSymbols();
-            // Evaluate wins using jagged array structure
-            var evaluation = _winEvaluator.EvaluateMegaways(reelSymbolsBefore, configuration, request.TotalBet);
+            
+            // Get top reel symbols as codes for win evaluation
+            IReadOnlyList<string>? topReelSymbolsForEval = null;
+            if (board is MegawaysReelBoard megawaysBoardEval && megawaysBoardEval.TopReel is not null)
+            {
+                // Convert top reel symbol IDs to codes
+                var topReelSymbolIds = megawaysBoardEval.TopReel.Symbols;
+                var topReelCodes = new List<string>();
+                foreach (var symbolId in topReelSymbolIds)
+                {
+                    if (configuration.SymbolMap.TryGetValue(symbolId, out var def))
+                    {
+                        topReelCodes.Add(def.Code);
+                    }
+                    else
+                    {
+                        // Fallback: use symbolId as-is if not found in map
+                        topReelCodes.Add(symbolId);
+                    }
+                }
+                topReelSymbolsForEval = topReelCodes;
+            }
+            
+            // Evaluate wins using jagged array structure, including top reel symbols
+            var evaluation = _winEvaluator.EvaluateMegaways(reelSymbolsBefore, topReelSymbolsForEval, configuration, request.TotalBet);
 
             if (evaluation.SymbolWins.Count == 0)
             {
@@ -245,7 +268,22 @@ public sealed class SpinHandler
             waysToWin = megawaysBoardResult.CalculateWaysToWin();
             if (megawaysBoardResult.TopReel is not null)
             {
-                topReelSymbols = megawaysBoardResult.TopReel.Symbols;
+                // Convert top reel symbol IDs to codes before sending to frontend
+                var topReelSymbolIds = megawaysBoardResult.TopReel.Symbols;
+                var topReelCodes = new List<string>();
+                foreach (var symbolId in topReelSymbolIds)
+                {
+                    if (configuration.SymbolMap.TryGetValue(symbolId, out var def))
+                    {
+                        topReelCodes.Add(def.Code);
+                    }
+                    else
+                    {
+                        // Fallback: use symbolId as-is if not found in map
+                        topReelCodes.Add(symbolId);
+                    }
+                }
+                topReelSymbols = topReelCodes;
             }
         }
 

@@ -31,7 +31,7 @@ public sealed class WinEvaluator
                 reelSymbols.Add(reel);
             }
             
-            return EvaluateMegaways(reelSymbols, configuration, bet);
+            return EvaluateMegaways(reelSymbols, null, configuration, bet);
         }
 
         return EvaluateTraditional(grid, configuration, bet);
@@ -40,9 +40,9 @@ public sealed class WinEvaluator
     /// <summary>
     /// Evaluates wins for Megaways games using jagged array structure
     /// </summary>
-    public WinEvaluationResult EvaluateMegaways(IReadOnlyList<IReadOnlyList<string>> reelSymbols, GameConfiguration configuration, Money bet)
+    public WinEvaluationResult EvaluateMegaways(IReadOnlyList<IReadOnlyList<string>> reelSymbols, IReadOnlyList<string>? topReelSymbols, GameConfiguration configuration, Money bet)
     {
-        return EvaluateMegawaysInternal(reelSymbols, configuration, bet);
+        return EvaluateMegawaysInternal(reelSymbols, topReelSymbols, configuration, bet);
     }
 
     private WinEvaluationResult EvaluateTraditional(IReadOnlyList<string> grid, GameConfiguration configuration, Money bet)
@@ -85,7 +85,7 @@ public sealed class WinEvaluator
         return new WinEvaluationResult(new Money(totalWin), wins);
     }
 
-    private WinEvaluationResult EvaluateMegawaysInternal(IReadOnlyList<IReadOnlyList<string>> reelSymbols, GameConfiguration configuration, Money bet)
+    private WinEvaluationResult EvaluateMegawaysInternal(IReadOnlyList<IReadOnlyList<string>> reelSymbols, IReadOnlyList<string>? topReelSymbols, GameConfiguration configuration, Money bet)
     {
         var wins = new List<SymbolWin>();
         var totalWin = 0m;
@@ -119,7 +119,7 @@ public sealed class WinEvaluator
                 var symbolCount = 0;
                 var reelPositions = new List<int>();
                 
-                // Count matching symbols on this reel
+                // A. Count matching symbols in Main Reel
                 for (var pos = 0; pos < reel.Count; pos++)
                 {
                     var symbol = reel[pos];
@@ -142,6 +142,49 @@ public sealed class WinEvaluator
                         symbolCount++;
                         reelPositions.Add(pos);
                         allWinPositions.Add((reelIndex, pos));
+                    }
+                }
+                
+                // B. Count in Top Reel (if enabled and this column is covered)
+                if (configuration.Megaways?.TopReel?.Enabled == true && 
+                    topReelSymbols != null && 
+                    topReelSymbols.Count > 0 &&
+                    configuration.Megaways.TopReel.CoversReels.Contains(reelIndex))
+                {
+                    // Map column index to top reel index
+                    // Top reel typically covers cols 1, 2, 3, 4 (0-indexed: 1, 2, 3, 4)
+                    // topReelSymbols array is 0-3 corresponding to cols 1-4
+                    var coversReels = configuration.Megaways.TopReel.CoversReels;
+                    int topIndex = -1;
+                    for (int i = 0; i < coversReels.Count; i++)
+                    {
+                        if (coversReels[i] == reelIndex)
+                        {
+                            topIndex = i;
+                            break;
+                        }
+                    }
+                    
+                    if (topIndex >= 0 && topIndex < topReelSymbols.Count)
+                    {
+                        var topSym = topReelSymbols[topIndex];
+                        // Check if top reel symbol matches target or is wild
+                        bool topMatch = topSym == targetSymbol;
+                        bool topWild = false;
+                        
+                        // Wilds on top reel (reels 2-5) substitute for any symbol
+                        if (reelIndex >= 2 && reelIndex <= 5)
+                        {
+                            // TODO: Add wild check when Wild type is available
+                            // topWild = symbolMap.ContainsKey(topSym) && symbolMap[topSym].Type == SymbolType.Wild;
+                        }
+                        
+                        if (topMatch || topWild)
+                        {
+                            symbolCount++;
+                            // Top reel position is considered at the "top" of the reel
+                            allWinPositions.Add((reelIndex, -1)); // Use -1 to indicate top reel position
+                        }
                     }
                 }
                 
