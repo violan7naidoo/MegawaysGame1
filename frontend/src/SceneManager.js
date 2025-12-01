@@ -27,6 +27,7 @@
 
 import * as PIXI from 'pixi.js';
 import GridRenderer from './GridRenderer.js';
+import TopReelRenderer from './TopReelRenderer.js';
 import UIRenderer from './UIRenderer.js';
 import AnimationManager from './AnimationManager.js';
 import BackgroundAnimation from './BackgroundAnimation.js';
@@ -56,6 +57,7 @@ export default class SceneManager {
     // Create managers
     this.animationManager = new AnimationManager(); // Handles cascade animations
     this.gridRenderer = null; // Will be created in initialize()
+    this.topReelRenderer = null; // Will be created in initialize()
     this.uiRenderer = new UIRenderer({ app }); // UI overlay renderer
     this.audioManager = new AudioManager(); // Sound manager
     
@@ -100,6 +102,9 @@ export default class SceneManager {
     this.isTurboMode = enabled;
     if (this.gridRenderer) {
       this.gridRenderer.setTurboMode(enabled);
+    }
+    if (this.topReelRenderer) {
+      this.topReelRenderer.setTurboMode(enabled);
     }
     if (this.animationManager) {
       this.animationManager.setTurboMode(enabled);
@@ -207,6 +212,20 @@ export default class SceneManager {
     this.gridSize = this.gridRenderer.getSize();
     // Initialize reels with random symbols for initial display
     this.gridRenderer.initializeReels(this.assets);
+    
+    // Initialize TopReelRenderer for horizontal top reel above reels 2-5
+    const reelWidth = this.gridRenderer.reelWidth || 140;
+    const symbolSize = this.gridRenderer.symbolSize || 140;
+    this.topReelRenderer = new TopReelRenderer({
+      app: this.app,
+      reelWidth: reelWidth,
+      symbolSize: symbolSize,
+      coversReels: [1, 2, 3, 4], // Reels 2-5 (indices 1-4)
+      symbolCount: 4
+    });
+    this.topReelRenderer.initialize(this.sceneLayer, -symbolSize); // Position above main grid
+    this.topReelRenderer.setAvailableSymbols(this.availableSymbols);
+    
     this.animationManager.attachGrid(this.gridRenderer, this.assets);
     this.resizeStage();
 
@@ -308,8 +327,8 @@ export default class SceneManager {
     }
 
     // Update top reel symbols (horizontal reel above columns 2-5)
-    if (topReelSymbols && topReelSymbols.length > 0) {
-      this.gridRenderer.setTopReel(topReelSymbols);
+    if (topReelSymbols && topReelSymbols.length > 0 && this.topReelRenderer) {
+      this.topReelRenderer.setSymbols(topReelSymbols);
     }
 
     // Update ways-to-win display in UI (Megaways feature)
@@ -326,25 +345,26 @@ export default class SceneManager {
 
     // Extract cascade data
     const cascades = results.cascades ?? []; // Array of cascade steps
-    const finalGrid = results.finalGridSymbols; // Final grid state (if no cascades)
+    const finalReelSymbols = results.reelSymbols; // Final grid state as jagged array (if no cascades)
 
     // No cascades - just show final grid
     if (!cascades.length) {
-      if (Array.isArray(finalGrid)) {
-        console.log('[SceneManager] continueRenderResults: No cascades, final grid received', {
-          gridLength: finalGrid.length,
-          columns: this.columns,
-          rows: this.rows,
+      if (Array.isArray(finalReelSymbols) && finalReelSymbols.length > 0) {
+        console.log('[SceneManager] continueRenderResults: No cascades, final reel symbols received', {
+          columns: finalReelSymbols.length,
+          reelLengths: finalReelSymbols.map(reel => reel.length),
           isSpinning: this.gridRenderer?.isSpinning,
           isRunning: this.gridRenderer?.isRunning()
         });
-        console.log('[SceneManager] continueRenderResults: Final grid symbols (first 30):', finalGrid.slice(0, 30));
         
         // CRITICAL: Preload result IMMEDIATELY when backend response arrives
         // This applies final textures to spinning reels DURING the spin animation
         // so they stop on the correct symbols, not random ones
         console.log('[SceneManager] continueRenderResults: Calling preloadSpinResult IMMEDIATELY');
-        this.gridRenderer.preloadSpinResult(finalGrid, this.assets);
+        this.gridRenderer.preloadSpinResult(finalReelSymbols, this.assets);
+        if (this.topReelRenderer && topReelSymbols && topReelSymbols.length > 0) {
+          this.topReelRenderer.preloadSpinResult(topReelSymbols, this.assets);
+        }
         console.log('[SceneManager] continueRenderResults: preloadSpinResult completed');
 
         /**
@@ -356,7 +376,10 @@ export default class SceneManager {
           this.audioManager.playStop(); // Play reel stop sound
           // Transition from spinning reels to static grid
           // Textures are already applied, so this is just a layer switch
-          await this.gridRenderer.transitionSpinToGrid(finalGrid, this.assets);
+          await this.gridRenderer.transitionSpinToGrid(finalReelSymbols, this.assets);
+          if (this.topReelRenderer && topReelSymbols && topReelSymbols.length > 0) {
+            await this.topReelRenderer.transitionSpinToGrid(topReelSymbols, this.assets);
+          }
           
           // Play win sound if there's a win
           if (playResponse && playResponse.win) {
@@ -389,9 +412,10 @@ export default class SceneManager {
 
     // Preload first cascade result immediately so textures are applied during spin
     // This prevents texture flicker when reels stop
-    if (Array.isArray(firstCascade.gridBefore)) {
-      this.gridRenderer.preloadSpinResult(firstCascade.gridBefore, this.assets);
+    if (Array.isArray(firstCascade.reelSymbolsBefore)) {
+      this.gridRenderer.preloadSpinResult(firstCascade.reelSymbolsBefore, this.assets);
     }
+    // Top reel symbols are handled separately in cascade steps
 
     /**
      * Starts cascade animation sequence
@@ -401,9 +425,10 @@ export default class SceneManager {
       this.audioManager.playStop(); // Play reel stop sound
       
       // Transition from spinning reels to first cascade grid state
-      if (Array.isArray(firstCascade.gridBefore)) {
-        await this.gridRenderer.transitionSpinToGrid(firstCascade.gridBefore, this.assets);
+      if (Array.isArray(firstCascade.reelSymbolsBefore)) {
+        await this.gridRenderer.transitionSpinToGrid(firstCascade.reelSymbolsBefore, this.assets);
       }
+      // Top reel transition is handled in cascade steps
 
       // Play cascade sequence (highlights wins, fades symbols, drops new ones)
       this.animationManager.playCascadeSequence(cascades, {
@@ -592,6 +617,9 @@ export default class SceneManager {
       return;
     }
     this.gridRenderer.startSpin(this.assets); // Start visual spin
+    if (this.topReelRenderer) {
+      this.topReelRenderer.startSpin(this.assets); // Start top reel horizontal spin
+    }
     this.audioManager.playSpin(); // Play spin sound
   }
 
@@ -606,5 +634,8 @@ export default class SceneManager {
       return;
     }
     this.gridRenderer.stopSpin();
+    if (this.topReelRenderer) {
+      this.topReelRenderer.stopSpin();
+    }
   }
 }

@@ -36,15 +36,15 @@ public sealed record ResultsEnvelope(
     ScatterOutcome? Scatter,
     FeatureSummary? FreeSpins,
     string RngTransactionId,
-    IReadOnlyList<string>? FinalGridSymbols,
+    IReadOnlyList<IReadOnlyList<string>>? ReelSymbols,
     IReadOnlyList<int>? ReelHeights = null,
     IReadOnlyList<string>? TopReelSymbols = null,
     int? WaysToWin = null);
 
 public sealed record CascadeStep(
     int Index,
-    IReadOnlyList<string> GridBefore,
-    IReadOnlyList<string> GridAfter,
+    IReadOnlyList<IReadOnlyList<string>> ReelSymbolsBefore,
+    IReadOnlyList<IReadOnlyList<string>> ReelSymbolsAfter,
     IReadOnlyList<SymbolWin> WinsAfterCascade,
     Money BaseWin,
     decimal AppliedMultiplier,

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using GameEngine.Configuration;
@@ -8,12 +9,40 @@ public sealed class WinEvaluator
 {
     public WinEvaluationResult Evaluate(IReadOnlyList<string> grid, GameConfiguration configuration, Money bet)
     {
+        // Convert flat array to jagged array for Megaways
         if (configuration.Board.Megaways && configuration.Megaways is not null)
         {
-            return EvaluateMegaways(grid, configuration, bet);
+            var columns = configuration.Board.Columns;
+            var maxRows = configuration.Board.MaxRows ?? configuration.Board.Rows;
+            var reelSymbols = new List<List<string>>();
+            
+            // Reconstruct jagged array from flat array (temporary - will be removed when SpinHandler passes jagged array)
+            for (var col = 0; col < columns; col++)
+            {
+                var reel = new List<string>();
+                for (var row = 0; row < maxRows; row++)
+                {
+                    var index = row * columns + col;
+                    if (index < grid.Count && grid[index] != null)
+                    {
+                        reel.Add(grid[index]);
+                    }
+                }
+                reelSymbols.Add(reel);
+            }
+            
+            return EvaluateMegaways(reelSymbols, configuration, bet);
         }
 
         return EvaluateTraditional(grid, configuration, bet);
+    }
+    
+    /// <summary>
+    /// Evaluates wins for Megaways games using jagged array structure
+    /// </summary>
+    public WinEvaluationResult EvaluateMegaways(IReadOnlyList<IReadOnlyList<string>> reelSymbols, GameConfiguration configuration, Money bet)
+    {
+        return EvaluateMegawaysInternal(reelSymbols, configuration, bet);
     }
 
     private WinEvaluationResult EvaluateTraditional(IReadOnlyList<string> grid, GameConfiguration configuration, Money bet)
@@ -56,124 +85,152 @@ public sealed class WinEvaluator
         return new WinEvaluationResult(new Money(totalWin), wins);
     }
 
-    private WinEvaluationResult EvaluateMegaways(IReadOnlyList<string> grid, GameConfiguration configuration, Money bet)
+    private WinEvaluationResult EvaluateMegawaysInternal(IReadOnlyList<IReadOnlyList<string>> reelSymbols, GameConfiguration configuration, Money bet)
     {
         var wins = new List<SymbolWin>();
         var totalWin = 0m;
-        var columns = configuration.Board.Columns;
-        var maxRows = configuration.Board.MaxRows ?? configuration.Board.Rows;
+        var columns = reelSymbols.Count;
         // Maximum value for Money type (decimal(20,2))
         const decimal maxMoneyValue = 999999999999999999.99m;
-
-        // Reconstruct grid structure: columns x rows
-        // Grid is in row-major order (row 0, all cols; row 1, all cols; etc.)
-        var gridMatrix = new List<List<string?>>();
-        for (var row = 0; row < maxRows; row++)
-        {
-            var rowData = new List<string?>();
-            for (var col = 0; col < columns; col++)
-            {
-                var index = row * columns + col;
-                rowData.Add(index < grid.Count ? grid[index] : null);
-            }
-            gridMatrix.Add(rowData);
-        }
+        
+        // Build symbol map for quick lookup
+        var symbolMap = configuration.SymbolMap;
+        // TODO: Add explicit Wild symbol type support when available
+        // For now, no Wild symbols are defined in the configuration
 
         foreach (var entry in configuration.Paytable)
         {
-            // Count symbols per reel (column)
-            var symbolsPerReel = new List<int>(columns);
-            var allIndices = new List<int>();
-
-            for (var col = 0; col < columns; col++)
+            var targetSymbol = entry.SymbolCode;
+            
+            // Check if symbol appears on Reel 0 (leftmost) - REQUIRED for win
+            if (reelSymbols[0].Count == 0 || !reelSymbols[0].Contains(targetSymbol))
             {
+                continue; // Must start from Reel 0
+            }
+            
+            // Count symbols per reel, checking adjacent reels left-to-right
+            var symbolsPerReel = new List<int>(columns);
+            var allWinPositions = new List<(int Reel, int Position)>();
+            var contiguousReels = 0;
+            
+            for (var reelIndex = 0; reelIndex < columns; reelIndex++)
+            {
+                var reel = reelSymbols[reelIndex];
                 var symbolCount = 0;
-                for (var row = 0; row < maxRows; row++)
+                var reelPositions = new List<int>();
+                
+                // Count matching symbols on this reel
+                for (var pos = 0; pos < reel.Count; pos++)
                 {
-                    if (row < gridMatrix.Count && col < gridMatrix[row].Count && gridMatrix[row][col] == entry.SymbolCode)
+                    var symbol = reel[pos];
+                    
+                    // Check if symbol matches target, or if it's a wild (on reels 2-5)
+                    bool isMatch = symbol == targetSymbol;
+                    bool isWild = false;
+                    
+                    // Wilds on reels 2-5 (indices 2, 3, 4, 5) substitute for any symbol
+                    if (reelIndex >= 2 && reelIndex <= 5)
+                    {
+                        // For now, we'll check if symbol is in wildSymbolCodes
+                        // In a real implementation, you'd check symbolMap[symbol].Type == SymbolType.Wild
+                        // For now, we'll skip wild logic since no Wild type exists
+                        // isWild = symbolMap.ContainsKey(symbol) && symbolMap[symbol].Type == SymbolType.Wild;
+                    }
+                    
+                    if (isMatch || isWild)
                     {
                         symbolCount++;
-                        var index = row * columns + col;
-                        if (index < grid.Count)
-                        {
-                            allIndices.Add(index);
-                        }
+                        reelPositions.Add(pos);
+                        allWinPositions.Add((reelIndex, pos));
                     }
                 }
+                
                 symbolsPerReel.Add(symbolCount);
-            }
-
-            // Calculate ways to win: product of symbol counts per reel
-            // Symbols must appear on adjacent reels starting from left (reel 0)
-            var ways = 1;
-            var firstReelWithSymbols = -1;
-            var lastReelWithSymbols = -1;
-
-            for (var i = 0; i < symbolsPerReel.Count; i++)
-            {
-                if (symbolsPerReel[i] > 0)
+                
+                // Check if this reel has symbols (required for contiguous win)
+                if (symbolCount > 0)
                 {
-                    if (firstReelWithSymbols == -1)
-                    {
-                        firstReelWithSymbols = i;
-                    }
-                    lastReelWithSymbols = i;
-                    ways *= symbolsPerReel[i];
+                    contiguousReels++;
+                }
+                else
+                {
+                    // If we hit a reel with no symbols, stop checking (must be contiguous)
+                    break;
                 }
             }
-
-            // Must start from reel 0 (leftmost) and be contiguous
-            if (firstReelWithSymbols != 0 || ways == 1)
+            
+            // Must have at least 2 contiguous reels starting from Reel 0
+            if (contiguousReels < 2)
             {
                 continue;
             }
-
-            // Use symbol count (total symbols) for paytable lookup
-            var totalSymbolCount = symbolsPerReel.Sum();
+            
+            // Calculate ways: product of symbol counts on contiguous reels
+            var ways = 1;
+            for (var i = 0; i < contiguousReels; i++)
+            {
+                ways *= symbolsPerReel[i];
+            }
+            
+            if (ways == 0)
+            {
+                continue;
+            }
+            
+            // Total symbol count for paytable lookup
+            var totalSymbolCount = symbolsPerReel.Take(contiguousReels).Sum();
             if (totalSymbolCount < 2)
             {
                 continue;
             }
-
+            
+            // Find best matching paytable entry
             var bestMatch = entry.Multipliers
                 .Where(mult => totalSymbolCount >= mult.Count)
                 .OrderByDescending(mult => mult.Count)
                 .FirstOrDefault();
-
+            
             if (bestMatch is null)
             {
                 continue;
             }
-
-            // Payout: base multiplier from paytable, but ways affect the total
-            // For Megaways, we use the ways directly as a multiplier factor
-            var basePayout = Money.FromBet(bet.Amount, bestMatch.Multiplier);
-            // Ways multiplier: ways / minimum ways (2^columns for minimum)
-            var minWays = (int)Math.Pow(2, columns);
-            var waysMultiplier = (decimal)ways / minWays;
             
-            // Calculate payout amount and ensure it doesn't exceed Money's decimal(20,2) limit
-            var payoutAmount = basePayout.Amount * waysMultiplier;
-            // Round to 2 decimal places and clamp to valid range
+            // Payout calculation: base multiplier × ways
+            // For Megaways, payout = bet × base_multiplier × ways
+            var basePayout = Money.FromBet(bet.Amount, bestMatch.Multiplier);
+            var payoutAmount = basePayout.Amount * ways;
+            
+            // Round and clamp to valid range
             payoutAmount = Math.Round(payoutAmount, 2, MidpointRounding.ToZero);
-            // Ensure it doesn't exceed maximum value for decimal(20,2)
             if (payoutAmount > maxMoneyValue)
             {
                 payoutAmount = maxMoneyValue;
             }
             var payout = new Money(payoutAmount);
             
-            wins.Add(new SymbolWin(entry.SymbolCode, totalSymbolCount, bestMatch.Multiplier, payout, allIndices, ways));
+            // Convert win positions to flat indices for compatibility (temporary)
+            var allIndices = new List<int>();
+            // Note: This is a simplified conversion - in reality, we'd need reel heights
+            // For now, we'll leave indices empty or calculate based on reel structure
+            // The frontend should use ReelSymbols structure instead
+            
+            wins.Add(new SymbolWin(
+                entry.SymbolCode, 
+                totalSymbolCount, 
+                bestMatch.Multiplier, 
+                payout, 
+                allIndices.Count > 0 ? allIndices : null, 
+                ways));
             totalWin += payout.Amount;
         }
-
+        
         // Ensure totalWin doesn't exceed Money's limits
         totalWin = Math.Round(totalWin, 2, MidpointRounding.ToZero);
         if (totalWin > maxMoneyValue)
         {
             totalWin = maxMoneyValue;
         }
-
+        
         return new WinEvaluationResult(new Money(totalWin), wins);
     }
 }

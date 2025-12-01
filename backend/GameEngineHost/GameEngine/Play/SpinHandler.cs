@@ -104,18 +104,19 @@ public sealed class SpinHandler
         Money scatterWin = Money.Zero;
         Money featureWin = nextState.FreeSpins?.FeatureWin ?? Money.Zero;
         int freeSpinsAwarded = 0;
-        IReadOnlyList<string>? finalGrid = null;
+        IReadOnlyList<IReadOnlyList<string>>? finalReelSymbols = null;
 
         while (true)
         {
-            var gridBefore = board.FlattenCodes();
-            var evaluation = _winEvaluator.Evaluate(gridBefore.Where(s => s != null).Select(s => s!).ToList(), configuration, request.TotalBet);
+            var reelSymbolsBefore = board.GetReelSymbols();
+            // Evaluate wins using jagged array structure
+            var evaluation = _winEvaluator.EvaluateMegaways(reelSymbolsBefore, configuration, request.TotalBet);
 
             if (evaluation.SymbolWins.Count == 0)
             {
-                finalGrid = cascades.Count > 0 
-                    ? cascades[^1].GridAfter 
-                    : gridBefore.Where(s => s != null).Select(s => s!).ToList();
+                finalReelSymbols = cascades.Count > 0 
+                    ? cascades[^1].ReelSymbolsAfter 
+                    : reelSymbolsBefore;
                 break;
             }
 
@@ -171,12 +172,12 @@ public sealed class SpinHandler
                 board.Refill();
             }
 
-            var gridAfter = board.FlattenCodes();
+            var reelSymbolsAfter = board.GetReelSymbols();
 
             cascades.Add(new CascadeStep(
                 Index: cascadeIndex++,
-                GridBefore: gridBefore.Where(s => s != null).Select(s => s!).ToList(),
-                GridAfter: gridAfter.Where(s => s != null).Select(s => s!).ToList(),
+                ReelSymbolsBefore: reelSymbolsBefore,
+                ReelSymbolsAfter: reelSymbolsAfter,
                 WinsAfterCascade: evaluation.SymbolWins,
                 BaseWin: cascadeBaseWin,
                 AppliedMultiplier: appliedMultiplier,
@@ -231,7 +232,7 @@ public sealed class SpinHandler
                 FeatureWin: nextState.FreeSpins.FeatureWin,
                 TriggeredThisSpin: nextState.FreeSpins.JustTriggered);
 
-        finalGrid ??= board.FlattenCodes().Where(s => s != null).Select(s => s!).ToList();
+        finalReelSymbols ??= board.GetReelSymbols();
 
         // Extract Megaways-specific data
         IReadOnlyList<int>? reelHeights = null;
@@ -249,102 +250,42 @@ public sealed class SpinHandler
         }
 
         // ===== BACKEND SYMBOL LOGGING =====
-        // Log the final grid symbols so frontend can verify what should be displayed
-        Console.WriteLine($"[SpinHandler] ===== FINAL GRID SYMBOLS (Backend Output) =====");
-        Console.WriteLine($"[SpinHandler] Total symbols in finalGrid: {finalGrid.Count}");
+        // Log the final reel symbols so frontend can verify what should be displayed
+        Console.WriteLine($"[SpinHandler] ===== FINAL REEL SYMBOLS (Backend Output) =====");
         
-        if (reelHeights != null && reelHeights.Count > 0)
+        if (finalReelSymbols != null)
         {
-            int columns = reelHeights.Count;
-            int maxHeight = reelHeights.Max();
-            int totalRows = maxHeight + 1; // +1 for top reel row
+            Console.WriteLine($"[SpinHandler] ReelSymbols structure: {finalReelSymbols.Count} columns");
             
-            Console.WriteLine($"[SpinHandler] Grid structure: {columns} columns, maxHeight={maxHeight}, totalRows={totalRows}");
-            Console.WriteLine($"[SpinHandler] ReelHeights: [{string.Join(", ", reelHeights)}]");
-            
-            if (topReelSymbols != null)
+            if (reelHeights != null && reelHeights.Count > 0)
             {
-                Console.WriteLine($"[SpinHandler] TopReelSymbols: [{string.Join(", ", topReelSymbols)}]");
-            }
-            
-            // Log the full matrix structure
-            Console.WriteLine($"[SpinHandler] Full matrix (row-major, from maxHeight down to 0):");
-            for (int row = maxHeight; row >= 0; row--)
-            {
-                var rowSymbols = new List<string>();
-                for (int col = 0; col < columns; col++)
+                Console.WriteLine($"[SpinHandler] ReelHeights: [{string.Join(", ", reelHeights)}]");
+                
+                if (topReelSymbols != null)
                 {
-                    int idx = (maxHeight - row) * columns + col;
-                    if (idx < finalGrid.Count)
-                    {
-                        rowSymbols.Add(finalGrid[idx] ?? "NULL");
-                    }
-                    else
-                    {
-                        rowSymbols.Add("OUT_OF_BOUNDS");
-                    }
+                    Console.WriteLine($"[SpinHandler] TopReelSymbols: [{string.Join(", ", topReelSymbols)}]");
                 }
-                Console.WriteLine($"[SpinHandler]   Row {row,2}: [{string.Join(", ", rowSymbols)}]");
-            }
-            
-            // Log what each reel should display
-            // Top reel is at row maxHeight, main reels are at rows 0 to maxHeight-1
-            Console.WriteLine($"[SpinHandler] Expected frontend display:");
-            
-            // Log top reel
-            if (topReelSymbols != null)
-            {
-                Console.WriteLine($"[SpinHandler]   Top reel (row {maxHeight}, columns 1-4): [{string.Join(", ", topReelSymbols)}]");
-            }
-            
-            // Log main reels (rows 0 to reelHeight-1 for each reel)
-            Console.WriteLine($"[SpinHandler] Main reels (rows 0 to reelHeight-1, bottom to top):");
-            for (int col = 0; col < columns; col++)
-            {
-                int reelHeight = reelHeights[col];
-                var reelSymbols = new List<string>();
-                for (int row = 0; row < reelHeight; row++)
+                
+                // Log main reels (each column with its symbols)
+                Console.WriteLine($"[SpinHandler] Main reels (rows 0 to reelHeight-1, bottom to top):");
+                for (int col = 0; col < finalReelSymbols.Count && col < reelHeights.Count; col++)
                 {
-                    // Main reel symbols: backend matrix row r (where r < reelHeight) contains ReelColumn[r]
-                    // Backend iterates from maxHeight down to 0, so:
-                    //   - Row maxHeight = top reel (for columns with top reel)
-                    //   - Row maxHeight-1 down to 0 = main reel symbols
-                    // But the backend only places symbols at matrix rows where row < reelHeight
-                    // So for a reel with height h, symbols are at matrix rows: h-1, h-2, ..., 1, 0
-                    // Matrix row r is at array index: (maxHeight - r) * columns + col
-                    
-                    // Frontend row 0 (bottom) = backend ReelColumn[0] = backend matrix row 0
-                    // Frontend row h-1 (top) = backend ReelColumn[h-1] = backend matrix row h-1
-                    int matrixRow = row; // Direct mapping
-                    int idx = (maxHeight - matrixRow) * columns + col;
-                    
-                    if (idx >= 0 && idx < finalGrid.Count)
-                    {
-                        string symbol = finalGrid[idx];
-                        if (symbol != null)
-                        {
-                            reelSymbols.Add(symbol);
-                        }
-                        else
-                        {
-                            reelSymbols.Add("NULL");
-                        }
-                    }
-                    else
-                    {
-                        reelSymbols.Add($"OUT_OF_BOUNDS(idx={idx})");
-                    }
+                    int reelHeight = reelHeights[col];
+                    var reelSymbols = finalReelSymbols[col];
+                    var symbolList = reelSymbols.Take(reelHeight).ToList();
+                    Console.WriteLine($"[SpinHandler]   Reel {col} (height {reelHeight}): [{string.Join(", ", symbolList)}] (row 0=bottom, row {reelHeight-1}=top)");
                 }
-                Console.WriteLine($"[SpinHandler]   Reel {col} (height {reelHeight}): [{string.Join(", ", reelSymbols)}] (row 0=bottom, row {reelHeight-1}=top)");
             }
-            
-            // Log the flat array for reference
-            Console.WriteLine($"[SpinHandler] Flat array (first 30 symbols): [{string.Join(", ", finalGrid.Take(30))}]");
-        }
-        else
-        {
-            // Non-Megaways board
-            Console.WriteLine($"[SpinHandler] Flat array (all symbols): [{string.Join(", ", finalGrid)}]");
+            else
+            {
+                // Non-Megaways board
+                Console.WriteLine($"[SpinHandler] ReelSymbols (all columns):");
+                for (int col = 0; col < finalReelSymbols.Count; col++)
+                {
+                    var reelSymbols = finalReelSymbols[col];
+                    Console.WriteLine($"[SpinHandler]   Reel {col}: [{string.Join(", ", reelSymbols)}]");
+                }
+            }
         }
         Console.WriteLine($"[SpinHandler] ================================================");
 
@@ -370,7 +311,7 @@ public sealed class SpinHandler
                 Scatter: scatterOutcome,
                 FreeSpins: featureSummary,
                 RngTransactionId: roundId,
-                FinalGridSymbols: finalGrid,
+                ReelSymbols: finalReelSymbols,
                 ReelHeights: reelHeights,
                 TopReelSymbols: topReelSymbols,
                 WaysToWin: waysToWin));
@@ -704,6 +645,16 @@ public sealed class SpinHandler
         public abstract void Refill();
         public abstract List<string?> FlattenCodes();
         public abstract int CalculateWaysToWin();
+        
+        /// <summary>
+        /// Gets reel symbols as a jagged array (columns x rows)
+        /// </summary>
+        public IReadOnlyList<IReadOnlyList<string>> GetReelSymbols()
+        {
+            return _columns.Select(column => 
+                column.Symbols.Select(s => s.Definition.Code).ToList()
+            ).ToList();
+        }
 
         public decimal SumMultipliers() =>
             _columns.SelectMany(column => column.Symbols)

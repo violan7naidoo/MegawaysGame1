@@ -484,15 +484,15 @@ async function main() {
       const playResponse = await network.play(sessionInfo.gameId, playPayload);
       console.log('[main] startSpin: Backend response received', {
         hasResults: !!playResponse.results,
-        hasFinalGrid: !!playResponse.results?.finalGridSymbols,
+        hasReelSymbols: !!playResponse.results?.reelSymbols,
         hasCascades: !!playResponse.results?.cascades,
         cascadesCount: playResponse.results?.cascades?.length || 0,
         win: playResponse.win,
         balance: playResponse.balance
       });
       
-      if (playResponse.results?.finalGridSymbols) {
-        console.log('[main] startSpin: Final grid symbols from backend (first 30):', playResponse.results.finalGridSymbols.slice(0, 30));
+      if (playResponse.results?.reelSymbols) {
+        console.log('[main] startSpin: Reel symbols from backend:', playResponse.results.reelSymbols.map(r => r?.length || 0));
       }
       
       // Step 4: Render results (handles cascades, free spins, etc.)

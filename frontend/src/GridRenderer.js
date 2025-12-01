@@ -1048,11 +1048,11 @@ export default class GridRenderer {
     this.renderGridFromMatrix(symbolMatrix, assets);
   }
 
-  renderGridFromMatrix(symbolMatrix, assets) {
-    // For Megaways, grid matrix may have variable structure
-    // Calculate expected size: maxRows * columns (may include nulls)
-    const expectedSize = this.maxRows * this.columns;
-    if (!symbolMatrix || symbolMatrix.length < this.columns) {
+  renderGridFromMatrix(reelSymbols, assets) {
+    // reelSymbols is now a jagged array: reelSymbols[column][row]
+    // Each column is an array of symbol codes for that reel (row 0 = bottom, row N = top)
+    if (!reelSymbols || !Array.isArray(reelSymbols) || reelSymbols.length < this.columns) {
+      console.warn('[GridRenderer] renderGridFromMatrix: Invalid reel symbols structure', reelSymbols);
       return;
     }
 
@@ -1062,190 +1062,32 @@ export default class GridRenderer {
       this.buildReels(assets);
     }
 
-    // Reconstruct grid structure from flat matrix
-    // Backend creates matrix row-major: rows from maxHeight down to 0
-    // Row maxHeight = top reel (for columns with top reel)
-    // Rows maxHeight-1 to 0 = main reel symbols
-    const gridRows = Math.ceil(symbolMatrix.length / this.columns);
-    const maxHeight = gridRows - 1; // Backend uses maxHeight as top row
-    
-    // Debug: Log matrix structure
-    console.log(`[GridRenderer] renderGridFromMatrix: matrixLength=${symbolMatrix.length}, columns=${this.columns}, gridRows=${gridRows}, maxHeight=${maxHeight}`);
-    if (symbolMatrix.length > 0) {
-      console.log(`[GridRenderer] First 12 symbols: ${symbolMatrix.slice(0, 12).join(', ')}`);
-      if (symbolMatrix.length > 12) {
-        console.log(`[GridRenderer] Last 12 symbols: ${symbolMatrix.slice(-12).join(', ')}`);
-      }
-    }
+    console.log(`[GridRenderer] renderGridFromMatrix: columns=${reelSymbols.length}, reelLengths=${reelSymbols.map(r => r?.length || 0).join(',')}`);
 
-    for (let col = 0; col < this.columns; col++) {
+    // Render each reel column
+    for (let col = 0; col < this.columns && col < reelSymbols.length; col++) {
       const reel = this.reels[col];
       if (!reel) continue;
 
-      const reelHeight = reel.height || (this.reelHeights && this.reelHeights[col]) || this.rows;
-      if (!reel.gridSprites) {
-        reel.gridSprites = new Array(reelHeight).fill(null);
+      const reelSymbolsForColumn = reelSymbols[col];
+      if (!Array.isArray(reelSymbolsForColumn)) {
+        console.warn(`[GridRenderer] renderGridFromMatrix: Reel ${col} is not an array`, reelSymbolsForColumn);
+        continue;
       }
 
-      // Determine which rows belong to this reel
-      // Top reel is at row maxHeight, main reel symbols below
-      const hasTopReel = this.topReel && [1, 2, 3, 4].includes(col);
+      const reelHeight = reelSymbolsForColumn.length;
+      if (!reel.gridSprites) {
+        reel.gridSprites = new Array(reelHeight).fill(null);
+      } else if (reel.gridSprites.length < reelHeight) {
+        // Extend array if needed
+        reel.gridSprites = [...reel.gridSprites, ...new Array(reelHeight - reel.gridSprites.length).fill(null)];
+      }
 
+      // Render each symbol in this reel (row 0 = bottom, row N-1 = top)
       for (let row = 0; row < reelHeight; row++) {
-        // Map reel row to grid matrix row
-        // Backend: row maxHeight = top reel, rows maxHeight-1 to 0 = main symbols
-        // Frontend: row 0 = bottom of reel, row h-1 = top of reel
-        // 
-        // Backend logic:
-        //   - For matrix row r (where r < maxHeight), it uses mainRow = r to index ReelColumn
-        //   - It only adds a symbol if mainRow < reelHeight
-        //   - So for a reel with height h, symbols are at matrix rows where r < h
-        //   - This means: matrix rows 0, 1, 2, ..., h-1 contain symbols
-        //   - But the matrix has maxHeight rows (0 to maxHeight-1), so rows h to maxHeight-1 are null
-        // 
-        // However, the backend iterates from maxHeight down to 0, so:
-        //   - Matrix row maxHeight-1 maps to ReelColumn[maxHeight-1] (if maxHeight-1 < h)
-        //   - Matrix row maxHeight-2 maps to ReelColumn[maxHeight-2] (if maxHeight-2 < h)
-        //   - ...
-        //   - Matrix row h-1 maps to ReelColumn[h-1] (if h-1 < h) ✓
-        //   - Matrix row h maps to ReelColumn[h] (if h < h) ✗ null
-        //   - Matrix row 0 maps to ReelColumn[0] ✓
-        // 
-        // So for a reel with height h, symbols are at matrix rows: 0, 1, 2, ..., h-1
-        // The topmost symbol (ReelColumn[h-1]) is at matrix row h-1
-        // 
-        // Frontend mapping should be: matrixRow = reelHeight - 1 - row
-        // For row = h-1 (top): matrixRow = h-1 ✓
-        // For row = 0 (bottom): matrixRow = h-1 ✓ Wait, that's wrong!
-        // 
-        // Actually, let me re-think this. The backend puts:
-        //   - ReelColumn[0] (bottom) at matrix row maxHeight-1
-        //   - ReelColumn[1] at matrix row maxHeight-2
-        //   - ...
-        //   - ReelColumn[h-1] (top) at matrix row maxHeight-h
-        // 
-        // But only if mainRow < h. So:
-        //   - Matrix row maxHeight-1 has ReelColumn[maxHeight-1] only if maxHeight-1 < h
-        //   - This is only true if maxHeight <= h, which is not always the case
-        // 
-        // I think the issue is that the backend's logic is: for matrix row r, use ReelColumn[r]
-        // But only if r < reelHeight. So symbols are at matrix rows 0 to h-1.
-        // 
-        // But wait, the backend iterates from maxHeight down to 0, so row values go from maxHeight to 0.
-        // For row = maxHeight-1, mainRow = maxHeight-1, and we check if maxHeight-1 < h.
-        // If maxHeight > h, then maxHeight-1 >= h, so we add null.
-        // 
-        // So for a reel with height h where maxHeight > h:
-        //   - Matrix rows maxHeight-1 down to h are null
-        //   - Matrix rows h-1 down to 0 have symbols
-        // 
-        // The topmost symbol (ReelColumn[h-1]) is at matrix row h-1
-        // The bottommost symbol (ReelColumn[0]) is at matrix row 0
-        // 
-        // Frontend mapping: matrixRow = h - 1 - row
-        // For row = h-1 (top): matrixRow = 0 ✗ Should be h-1
-        // 
-        // Actually, I think the correct mapping is: matrixRow = reelHeight - 1 - row
-        // But this gives: for row = h-1, matrixRow = 0, which is wrong.
-        // 
-        // Let me check the backend again. The backend does:
-        //   for (var row = maxHeight; row >= 0; row--)
-        //     if (row == maxHeight && hasTopReel) -> top reel
-        //     else if (row < maxHeight)
-        //       mainRow = row (for reels with top reel)
-        //       if (mainRow < reelHeight) -> ReelColumn[mainRow]
-        // 
-        // So for row = maxHeight-1, mainRow = maxHeight-1, check if maxHeight-1 < h
-        // For row = h-1, mainRow = h-1, check if h-1 < h ✓, so ReelColumn[h-1]
-        // For row = 0, mainRow = 0, check if 0 < h ✓, so ReelColumn[0]
-        // 
-        // So symbols are at matrix rows: h-1, h-2, ..., 1, 0 (if maxHeight > h)
-        // Or: maxHeight-1, maxHeight-2, ..., h, h-1, ..., 0 (but rows h to maxHeight-1 are null if maxHeight > h)
-        // 
-        // Actually, I think the symbols are at matrix rows: min(maxHeight-1, h-1), min(maxHeight-2, h-2), ..., 0
-        // But only the ones where the row value < h have symbols.
-        // 
-        // So for a reel with height h:
-        //   - If maxHeight <= h: symbols at rows maxHeight-1 down to 0
-        //   - If maxHeight > h: symbols at rows h-1 down to 0, rows h to maxHeight-1 are null
-        // 
-        // The topmost symbol is always at matrix row h-1 (if h > 0)
-        // The bottommost symbol is always at matrix row 0
-        // 
-        // Frontend mapping should be: matrixRow = reelHeight - 1 - row
-        // For row = h-1 (top): matrixRow = 0 ✗ Should be h-1
-        // 
-        // I think the correct mapping is: matrixRow = reelHeight - 1 - row, but we need to handle the case where maxHeight > h.
-        // Actually, I think: matrixRow = (reelHeight - 1) - row, which gives:
-        //   row = h-1 -> matrixRow = 0
-        //   row = 0 -> matrixRow = h-1
-        // 
-        // But we want:
-        //   row = h-1 -> matrixRow = h-1
-        //   row = 0 -> matrixRow = 0
-        // 
-        // So the mapping should be: matrixRow = row? No, that doesn't work either.
-        // 
-        // Let me think differently. The backend puts ReelColumn[i] at matrix row i (if i < h).
-        // So ReelColumn[0] is at matrix row 0, ReelColumn[h-1] is at matrix row h-1.
-        // 
-        // Frontend: row 0 is bottom, row h-1 is top.
-        // So: frontend row 0 should map to matrix row 0 (ReelColumn[0])
-        //     frontend row h-1 should map to matrix row h-1 (ReelColumn[h-1])
-        // 
-        // Backend builds matrix by iterating from maxHeight down to 0
-        // For each row r, it places ReelColumn[r] at matrix row r (if r < reelHeight)
-        // So ReelColumn[0] is at matrix row 0, ReelColumn[h-1] is at matrix row h-1
-        // Frontend row 0 (bottom) should map to ReelColumn[0] which is at matrix row 0
-        // Frontend row h-1 (top) should map to ReelColumn[h-1] which is at matrix row h-1
-        // Therefore: matrixRow = row (direct mapping)
-        let matrixRow = row;
+        const symbolCode = reelSymbolsForColumn[row];
 
-        // Skip top reel row (maxHeight) - we handle that separately
-        if (matrixRow >= maxHeight) {
-          continue;
-        }
-        
-        // Backend only places symbols at matrix rows where row < reelHeight
-        // So if matrixRow >= reelHeight, this position will be null for this reel
-        // But we're iterating row from 0 to reelHeight-1, so matrixRow = row will always be < reelHeight
-
-        if (matrixRow < 0 || matrixRow >= gridRows) continue;
-
-        // Calculate matrix index: backend builds matrix row-major from maxHeight down to 0
-        // Backend iterates: for (row = maxHeight; row >= 0; row--)
-        //   - Row maxHeight is added first at array indices 0 to columns-1
-        //   - Row maxHeight-1 is added next at array indices columns to 2*columns-1
-        //   - ...
-        //   - Row 0 is added last at array indices maxHeight*columns to (maxHeight+1)*columns-1
-        // So matrix row r is at array position: (maxHeight - r) * columns
-        // For column c: idx = (maxHeight - r) * columns + c
-        // 
-        // Backend logic for main reels (row < maxHeight):
-        //   - Uses mainRow = row to index ReelColumn[mainRow]
-        //   - Only adds symbol if mainRow < reelHeight
-        //   - So for reel with height h: symbols are at matrix rows 0 to h-1
-        //   - Matrix rows h to maxHeight-1 are null for this reel
-        // 
-        // IMPORTANT: matrixRow here is the backend matrix row (0 to maxHeight-1 for main reels)
-        // Frontend row 0 (bottom) maps to backend matrix row 0 (ReelColumn[0])
-        // Frontend row h-1 (top) maps to backend matrix row h-1 (ReelColumn[h-1])
-        const idx = (maxHeight - matrixRow) * this.columns + col;
-        if (idx >= symbolMatrix.length) continue;
-
-        const symbolCode = symbolMatrix[idx];
-        
-        // Debug: Log symbols to understand matrix structure (especially for reels 2-5 which have top reel)
-        // Log all rows for reels 2-3 to see the pattern
-        if (col >= 1 && col <= 2 && row < 3) {
-          console.log(`[GridRenderer] reel=${col}, frontendRow=${row}, matrixRow=${matrixRow}, idx=${idx}, reelHeight=${reelHeight}, maxHeight=${maxHeight}, symbol=${symbolCode || 'null'}, matrixLength=${symbolMatrix.length}`);
-          // Also log what's at adjacent indices to understand the structure
-          if (idx > 0 && idx < symbolMatrix.length - 1) {
-            console.log(`  [GridRenderer] Adjacent: idx-1=${symbolMatrix[idx-1]}, idx+1=${symbolMatrix[idx+1]}`);
-          }
-        }
-
-        if (symbolCode == null || symbolCode === '') {
+        if (symbolCode == null || symbolCode === '' || symbolCode === 'NULL') {
           if (reel.gridSprites[row]) {
             reel.gridSprites[row].visible = false;
             reel.gridSprites[row] = null;
@@ -1266,6 +1108,7 @@ export default class GridRenderer {
 
         const texture = assets.get(symbolCode) ?? assets.get('PLACEHOLDER');
         if (!texture) {
+          console.warn(`[GridRenderer] renderGridFromMatrix: Missing texture for symbol ${symbolCode}`);
           continue;
         }
 
@@ -1279,48 +1122,56 @@ export default class GridRenderer {
       }
     }
 
-    // Update top reel if present - show final symbols from matrix
-    if (this.topReelContainer && this.topReelSpinLayer && this.topReelSymbols && this.topReelSymbols.length > 0 && gridRows > 0) {
-      const maxHeight = gridRows - 1; // Backend uses maxHeight as top row
-      const topReelRow = maxHeight; // Top reel is at row maxHeight
+    // Update top reel if present - use topReelSymbols from backend
+    if (this.topReelContainer && this.topReelSpinLayer && this.topReelSymbols && this.topReelSymbols.length > 0) {
       const topReelCovers = [1, 2, 3, 4];
       
       // Ensure top reel is visible
       this.topReelContainer.visible = true;
       this.topReelSpinLayer.visible = true;
       
-      // Update the 4 visible symbols in the top reel (first 4 symbols in array)
-      for (let i = 0; i < topReelCovers.length; i++) {
+      // Update the 4 visible symbols in the top reel
+      // topReelSymbols is a flat array of 4 symbols for reels 1-4
+      for (let i = 0; i < topReelCovers.length && i < this.topReelSymbols.length; i++) {
         const col = topReelCovers[i];
         if (col >= this.columns) continue;
         
-        const idx = topReelRow * this.columns + col;
-        if (idx < symbolMatrix.length && symbolMatrix[idx]) {
-          const symbolCode = symbolMatrix[idx];
-          const texture = assets.get(symbolCode);
-          
-          if (texture && i < this.topReelSymbols.length) {
-            const symbol = this.topReelSymbols[i];
-            if (symbol && !symbol.destroyed) {
-              symbol.texture = texture;
-              const scale = Math.min(
-                this.symbolSize / texture.width,
-                this.symbolSize / texture.height
-              );
-              symbol.scale.set(scale);
-              // Position symbol correctly above the reel (centered in reel column)
-              symbol.x = col * this.reelWidth + (this.reelWidth / 2) - (symbol.width / 2);
-              symbol.y = Math.round((this.symbolSize - symbol.height) / 2);
-              symbol.visible = true;
-              symbol.alpha = 1;
-            }
+        const symbolCode = this.topReel[i]; // Use topReel array (set by setTopReel)
+        if (!symbolCode) continue;
+        
+        const texture = assets.get(symbolCode);
+        
+        if (texture && i < this.topReelSymbols.length) {
+          const symbol = this.topReelSymbols[i];
+          if (symbol && !symbol.destroyed) {
+            symbol.texture = texture;
+            const scale = Math.min(
+              this.symbolSize / texture.width,
+              this.symbolSize / texture.height
+            );
+            symbol.scale.set(scale);
+            // Position symbol correctly above the reel (centered in reel column)
+            symbol.x = col * this.reelWidth + (this.reelWidth / 2) - (symbol.width / 2);
+            symbol.y = Math.round((this.symbolSize - symbol.height) / 2);
+            symbol.visible = true;
+            symbol.alpha = 1;
           }
         }
       }
     }
 
-    this.setLogicalMatrix(symbolMatrix);
-    this.resultMatrix = [...symbolMatrix];
+    // Store reel symbols for reference (flattened for compatibility with existing code)
+    const flattened = [];
+    for (let col = 0; col < reelSymbols.length; col++) {
+      const reel = reelSymbols[col];
+      if (Array.isArray(reel)) {
+        for (let row = 0; row < reel.length; row++) {
+          flattened.push(reel[row] || null);
+        }
+      }
+    }
+    this.setLogicalMatrix(flattened);
+    this.resultMatrix = reelSymbols; // Store jagged array
   }
 
   /**
@@ -1341,28 +1192,27 @@ export default class GridRenderer {
    * @param {PIXI.Assets} assets - PixiJS Assets API
    * @returns {Promise<void>} Resolves when transition completes
    */
-  transitionSpinToGrid(symbolMatrix, assets) {
-    // For Megaways, matrix size is variable (maxRows * columns, may include top reel)
-    const expectedSize = this.maxRows * this.columns;
-    if (!symbolMatrix || symbolMatrix.length < this.columns) {
-      console.warn('[GridRenderer] transitionSpinToGrid: Invalid symbol matrix', { length: symbolMatrix?.length, columns: this.columns });
+  transitionSpinToGrid(reelSymbols, assets) {
+    // reelSymbols is now a jagged array: reelSymbols[column][row]
+    if (!reelSymbols || !Array.isArray(reelSymbols) || reelSymbols.length < this.columns) {
+      console.warn('[GridRenderer] transitionSpinToGrid: Invalid reel symbols', { length: reelSymbols?.length, columns: this.columns });
       return Promise.resolve();
     }
 
     console.log('[GridRenderer] transitionSpinToGrid: Starting transition', {
-      matrixLength: symbolMatrix.length,
+      columns: reelSymbols.length,
+      reelLengths: reelSymbols.map(r => r?.length || 0),
       isSpinning: this.isSpinning,
       isRunning: this.running,
       resultMatrixExists: !!this.resultMatrix
     });
-    console.log('[GridRenderer] transitionSpinToGrid: Symbol matrix (first 30):', symbolMatrix.slice(0, 30));
 
     // Preload the result to ensure spinning symbols have correct textures
     // This prevents texture flicker when reels stop
     // NOTE: This may have already been called in preloadSpinResult, but calling again to be safe
     if (!this.resultMatrix) {
       console.log('[GridRenderer] transitionSpinToGrid: resultMatrix not set, calling preloadSpinResult');
-      this.preloadSpinResult(symbolMatrix, assets);
+      this.preloadSpinResult(reelSymbols, assets);
     } else {
       console.log('[GridRenderer] transitionSpinToGrid: resultMatrix already set, textures should already be applied');
     }
@@ -1394,46 +1244,30 @@ export default class GridRenderer {
           this.buildReels(assets);
         }
 
-        // Reconstruct grid structure from flat matrix (same logic as renderGridFromMatrix)
-        // Backend creates matrix row-major: rows from maxHeight down to 0
-        const gridRows = Math.ceil(symbolMatrix.length / this.columns);
-        const maxHeight = gridRows - 1; // Backend uses maxHeight as top row
-
+        // reelSymbols is a jagged array: reelSymbols[column][row]
         // Create and position grid sprites FIRST (while spin layer is still visible)
         // This ensures they're ready and positioned before we switch
-        for (let col = 0; col < this.columns; col++) {
+        for (let col = 0; col < this.columns && col < reelSymbols.length; col++) {
           const reel = this.reels[col];
           if (!reel) continue;
 
-          // Get actual reel height for this column (variable for Megaways)
-          const reelHeight = reel.height || (this.reelHeights && this.reelHeights[col]) || this.rows;
+          const reelSymbolsForColumn = reelSymbols[col];
+          if (!Array.isArray(reelSymbolsForColumn)) {
+            console.warn(`[GridRenderer] transitionSpinToGrid: Reel ${col} is not an array`);
+            continue;
+          }
+
+          const reelHeight = reelSymbolsForColumn.length;
           
           if (!reel.gridSprites) {
             reel.gridSprites = new Array(reelHeight).fill(null);
+          } else if (reel.gridSprites.length < reelHeight) {
+            // Extend array if needed
+            reel.gridSprites = [...reel.gridSprites, ...new Array(reelHeight - reel.gridSprites.length).fill(null)];
           }
 
-          // Determine which rows belong to this reel
-          const hasTopReel = this.topReel && [1, 2, 3, 4].includes(col);
-
           for (let row = 0; row < reelHeight; row++) {
-            // Map reel row to grid matrix row
-            // Backend: symbols are at matrix rows where r < reelHeight
-            // So: matrixRow = row (direct mapping)
-            let matrixRow = row;
-
-            if (matrixRow < 0 || matrixRow >= gridRows) continue;
-
-            // Calculate matrix index: backend builds from maxHeight down to 0
-            // Backend iterates: for (row = maxHeight; row >= 0; row--)
-            //   - Row maxHeight is at array indices 0 to columns-1
-            //   - Row maxHeight-1 is at array indices columns to 2*columns-1
-            //   - ...
-            //   - Row 0 is at array indices maxHeight*columns to (maxHeight+1)*columns-1
-            // So matrix row r is at array position: (maxHeight - r) * columns + col
-            const idx = (maxHeight - matrixRow) * this.columns + col;
-            if (idx >= symbolMatrix.length) continue;
-
-            const symbolCode = symbolMatrix[idx];
+            const symbolCode = reelSymbolsForColumn[row];
 
             if (symbolCode == null || symbolCode === '') {
               if (reel.gridSprites[row]) {
@@ -1472,41 +1306,38 @@ export default class GridRenderer {
           }
         }
         
-        // Update top reel if present - show final symbols from matrix
-        if (this.topReelContainer && this.topReelSpinLayer && this.topReelSymbols && this.topReelSymbols.length > 0 && gridRows > 0) {
-          const maxHeight = gridRows - 1; // Backend uses maxHeight as top row
-          const topReelRow = maxHeight; // Top reel is at row maxHeight
+        // Update top reel if present - use topReel array (set by setTopReel)
+        if (this.topReelContainer && this.topReelSpinLayer && this.topReelSymbols && this.topReelSymbols.length > 0 && this.topReel) {
           const topReelCovers = [1, 2, 3, 4];
           
           // Ensure top reel is visible
           this.topReelContainer.visible = true;
           this.topReelSpinLayer.visible = true;
           
-          // Update the 4 visible symbols in the top reel (first 4 symbols in array)
-          for (let i = 0; i < topReelCovers.length; i++) {
+          // Update the 4 visible symbols in the top reel
+          for (let i = 0; i < topReelCovers.length && i < this.topReel.length; i++) {
             const col = topReelCovers[i];
             if (col >= this.columns) continue;
             
-            const idx = topReelRow * this.columns + col;
-            if (idx < symbolMatrix.length && symbolMatrix[idx]) {
-              const symbolCode = symbolMatrix[idx];
-              const texture = assets.get(symbolCode);
-              
-              if (texture && i < this.topReelSymbols.length) {
-                const symbol = this.topReelSymbols[i];
-                if (symbol && !symbol.destroyed) {
-                  symbol.texture = texture;
-                  const scale = Math.min(
-                    this.symbolSize / texture.width,
-                    this.symbolSize / texture.height
-                  );
-                  symbol.scale.set(scale);
-                  // Position symbol correctly above the reel (centered in reel column)
-                  symbol.x = col * this.reelWidth + (this.reelWidth / 2) - (symbol.width / 2);
-                  symbol.y = Math.round((this.symbolSize - symbol.height) / 2);
-                  symbol.visible = true;
-                  symbol.alpha = 1;
-                }
+            const symbolCode = this.topReel[i];
+            if (!symbolCode) continue;
+            
+            const texture = assets.get(symbolCode);
+            
+            if (texture && i < this.topReelSymbols.length) {
+              const symbol = this.topReelSymbols[i];
+              if (symbol && !symbol.destroyed) {
+                symbol.texture = texture;
+                const scale = Math.min(
+                  this.symbolSize / texture.width,
+                  this.symbolSize / texture.height
+                );
+                symbol.scale.set(scale);
+                // Position symbol correctly above the reel (centered in reel column)
+                symbol.x = col * this.reelWidth + (this.reelWidth / 2) - (symbol.width / 2);
+                symbol.y = Math.round((this.symbolSize - symbol.height) / 2);
+                symbol.visible = true;
+                symbol.alpha = 1;
               }
             }
           }
@@ -1532,8 +1363,8 @@ export default class GridRenderer {
         
         // Then show grid layer
         this.enterGridMode();
-        this.setLogicalMatrix(symbolMatrix);
-        this.resultMatrix = [...symbolMatrix];
+        // Store jagged array structure
+        this.resultMatrix = reelSymbols.map(reel => [...reel]);
         this.isCascading = true;
         
         resolve();
@@ -1577,23 +1408,20 @@ export default class GridRenderer {
    * @param {PIXI.Assets} assets - PixiJS Assets API
    * @returns {void}
    */
-  preloadSpinResult(symbolMatrix, assets) {
-    // For Megaways, matrix size is variable (maxRows * columns, may include top reel)
-    if (!symbolMatrix || symbolMatrix.length < this.columns) {
-      console.warn('[GridRenderer] preloadSpinResult: Invalid symbol matrix', { length: symbolMatrix?.length, columns: this.columns });
+  preloadSpinResult(reelSymbols, assets) {
+    // reelSymbols is now a jagged array: reelSymbols[column][row]
+    if (!reelSymbols || !Array.isArray(reelSymbols) || reelSymbols.length < this.columns) {
+      console.warn('[GridRenderer] preloadSpinResult: Invalid reel symbols', { length: reelSymbols?.length, columns: this.columns });
       return;
     }
 
     console.log('[GridRenderer] preloadSpinResult: Starting to apply final textures', {
-      matrixLength: symbolMatrix.length,
-      columns: this.columns,
-      rows: this.rows,
-      maxRows: this.maxRows,
+      columns: reelSymbols.length,
+      reelLengths: reelSymbols.map(r => r?.length || 0),
       isSpinning: this.isSpinning,
       isRunning: this.running,
       resultMatrixExists: !!this.resultMatrix
     });
-    console.log('[GridRenderer] preloadSpinResult: Backend symbol matrix (first 30):', symbolMatrix.slice(0, 30));
 
     if (!this.reels || this.reels.length === 0) {
       this.buildReels(assets);
@@ -1605,11 +1433,11 @@ export default class GridRenderer {
     }
 
     this.currentAssets = assets;
-    this.setLogicalMatrix(symbolMatrix);
     
     // CRITICAL: Set resultMatrix IMMEDIATELY to prevent ticker from overwriting with random textures
     // This must be set BEFORE applying textures so the ticker knows to stop random updates
-    this.resultMatrix = [...symbolMatrix];
+    // Store jagged array structure
+    this.resultMatrix = reelSymbols.map(reel => [...reel]);
     console.log('[GridRenderer] preloadSpinResult: resultMatrix set, ticker should stop random updates');
 
     // Ensure grid layer is hidden during spin to prevent duplicate symbols
@@ -1647,84 +1475,70 @@ export default class GridRenderer {
       reel.finalTexturesApplied = true;
       
       // Log what symbols were applied to this reel (for debugging)
-      const reelSymbols = [];
-      const reelHeightForLog = reel.height || (this.reelHeights && this.reelHeights[col]) || this.rows;
-      const gridRowsForLog = Math.ceil(symbolMatrix.length / this.columns);
-      const maxHeightForLog = gridRowsForLog - 1;
-      for (let row = 0; row < reelHeightForLog; row++) {
-        const matrixRow = row;
-        // Use correct index calculation: (maxHeight - matrixRow) * columns + col
-        const matrixIndex = (maxHeightForLog - matrixRow) * this.columns + col;
-        if (matrixIndex < symbolMatrix.length) {
-          reelSymbols.push(symbolMatrix[matrixIndex] || 'NULL');
-        } else {
-          reelSymbols.push('OUT_OF_BOUNDS');
-        }
+      const reelSymbolsForLog = reelSymbols[col];
+      if (Array.isArray(reelSymbolsForLog)) {
+        console.log(`[GridRenderer] preloadSpinResult: Reel ${col} (height ${reelSymbolsForLog.length}) should show (bottom to top):`, reelSymbolsForLog);
       }
-      console.log(`[GridRenderer] preloadSpinResult: Reel ${col} (height ${reelHeightForLog}) should show (bottom to top):`, reelSymbols);
     }
     
     // Apply final textures to top reel symbols immediately
     console.log('[GridRenderer] preloadSpinResult: Applying textures to top reel');
-    this._applyResultToTopReelSpinLayer(symbolMatrix, assets);
+    this._applyResultToTopReelSpinLayer(reelSymbols, assets);
     console.log('[GridRenderer] preloadSpinResult: All textures applied');
   }
   
-  _applyResultToTopReelSpinLayer(symbolMatrix, assets) {
+  _applyResultToTopReelSpinLayer(reelSymbols, assets) {
     if (!this.topReelSpinLayer || !this.topReelSymbols || this.topReelSymbols.length === 0) {
       console.log('[GridRenderer] _applyResultToTopReelSpinLayer: Top reel not available');
       return;
     }
     
-    if (!symbolMatrix || symbolMatrix.length < this.columns) {
-      console.warn('[GridRenderer] _applyResultToTopReelSpinLayer: Invalid symbol matrix');
+    if (!reelSymbols || !Array.isArray(reelSymbols)) {
+      console.warn('[GridRenderer] _applyResultToTopReelSpinLayer: Invalid reel symbols');
       return;
     }
     
-    // Calculate grid structure
-    const gridRows = Math.ceil(symbolMatrix.length / this.columns);
-    const maxHeight = gridRows - 1; // Backend uses maxHeight as top row
-    const topReelRow = maxHeight; // Top reel is at row maxHeight
+    // Top reel symbols come from this.topReel (set by setTopReel)
+    // This is a separate array of 4 symbols for reels 1-4
     const topReelCovers = [1, 2, 3, 4];
-    
     const appliedTopReelSymbols = [];
     
     // Apply final textures to the visible symbols in the top reel
-    // The visible symbols are the first 4 symbols in the array
     for (let i = 0; i < topReelCovers.length; i++) {
       const col = topReelCovers[i];
       if (col >= this.columns) continue;
       
-      const idx = topReelRow * this.columns + col;
-      if (idx < symbolMatrix.length && symbolMatrix[idx]) {
-        const symbolCode = symbolMatrix[idx];
-        const texture = assets.get(symbolCode);
-        
-        if (texture && i < this.topReelSymbols.length) {
-          const symbol = this.topReelSymbols[i];
-          if (symbol && !symbol.destroyed) {
-            const oldTexture = symbol.texture?.baseTexture?.resource?.url || 'unknown';
-            // Apply texture smoothly - don't change position, just texture
-            symbol.texture = texture;
-            const scale = Math.min(
-              this.symbolSize / texture.width,
-              this.symbolSize / texture.height
-            );
-            symbol.scale.set(scale);
-            // Keep current position - don't reposition here
-            
-            appliedTopReelSymbols.push(symbolCode);
-            
-            const newTexture = symbol.texture?.baseTexture?.resource?.url || 'unknown';
-            if (oldTexture !== newTexture && oldTexture !== 'unknown') {
-              console.log(`[GridRenderer] _applyResultToTopReelSpinLayer: Top reel symbol ${i} (col ${col}): Changed from ${oldTexture} to ${symbolCode}`);
-            }
+      // Get symbol from topReel array (set by setTopReel)
+      const symbolCode = this.topReel && this.topReel[i] ? this.topReel[i] : null;
+      if (!symbolCode) {
+        appliedTopReelSymbols.push('NULL');
+        continue;
+      }
+      
+      const texture = assets.get(symbolCode);
+      
+      if (texture && i < this.topReelSymbols.length) {
+        const symbol = this.topReelSymbols[i];
+        if (symbol && !symbol.destroyed) {
+          const oldTexture = symbol.texture?.baseTexture?.resource?.url || 'unknown';
+          // Apply texture smoothly - don't change position, just texture
+          symbol.texture = texture;
+          const scale = Math.min(
+            this.symbolSize / texture.width,
+            this.symbolSize / texture.height
+          );
+          symbol.scale.set(scale);
+          // Keep current position - don't reposition here
+          
+          appliedTopReelSymbols.push(symbolCode);
+          
+          const newTexture = symbol.texture?.baseTexture?.resource?.url || 'unknown';
+          if (oldTexture !== newTexture && oldTexture !== 'unknown') {
+            console.log(`[GridRenderer] _applyResultToTopReelSpinLayer: Top reel symbol ${i} (col ${col}): Changed from ${oldTexture} to ${symbolCode}`);
           }
-        } else {
-          appliedTopReelSymbols.push('MISSING');
         }
       } else {
-        appliedTopReelSymbols.push('NULL');
+        appliedTopReelSymbols.push('MISSING');
       }
     }
     
@@ -1736,8 +1550,8 @@ export default class GridRenderer {
       return;
     }
 
-    // For Megaways, resultMatrix size is variable (maxRows * columns)
-    if (!this.resultMatrix || this.resultMatrix.length < this.columns) {
+    // resultMatrix is now a jagged array: resultMatrix[column][row]
+    if (!this.resultMatrix || !Array.isArray(this.resultMatrix) || this.resultMatrix.length < this.columns) {
       console.warn('[GridRenderer] _applyResultToReelSpinLayer: No resultMatrix available');
       return;
     }
@@ -1751,17 +1565,19 @@ export default class GridRenderer {
     const symbolCount = reel.symbols.length;
     const col = reel.index; // Column index from reel object
 
-    if (!Number.isFinite(col) || col < 0 || col >= this.columns) {
+    if (!Number.isFinite(col) || col < 0 || col >= this.columns || col >= this.resultMatrix.length) {
       console.warn(`[GridRenderer] _applyResultToReelSpinLayer: Invalid column index ${col}`);
       return;
     }
 
-    // Get actual reel height for this column (variable for Megaways)
-    const reelHeight = reel.height || (this.reelHeights && this.reelHeights[col]) || this.rows;
-    
-    // Calculate grid structure
-    const gridRows = Math.ceil(this.resultMatrix.length / this.columns);
-    const maxHeight = gridRows - 1;
+    // Get reel symbols for this column (jagged array structure)
+    const reelSymbolsForColumn = this.resultMatrix[col];
+    if (!Array.isArray(reelSymbolsForColumn)) {
+      console.warn(`[GridRenderer] _applyResultToReelSpinLayer: Reel ${col} is not an array`);
+      return;
+    }
+
+    const reelHeight = reelSymbolsForColumn.length;
 
     // Use the *target* position for mapping, not the current animated position
     const targetPos = Number.isFinite(reel.targetPosition)
@@ -1771,21 +1587,9 @@ export default class GridRenderer {
     const appliedSymbols = []; // Track what we're applying for logging
 
     // Apply textures for each row in this reel
-    // Frontend: row 0 = bottom, row h-1 = top
-    // Backend: matrix row 0 = ReelColumn[0] (bottom), matrix row h-1 = ReelColumn[h-1] (top)
-    // Backend builds matrix from maxHeight down to 0, so:
-    //   - Matrix row r is at array index: (maxHeight - r) * columns + col
-    // So: matrixRow = row (direct mapping)
+    // reelSymbolsForColumn[row] is the symbol code for that row (row 0 = bottom, row N-1 = top)
     for (let row = 0; row < reelHeight; row += 1) {
-      const matrixRow = row; // Direct mapping: frontend row = backend matrix row
-      // Backend builds matrix from maxHeight down to 0, so row r is at index (maxHeight - r) * columns + col
-      const matrixIndex = (maxHeight - matrixRow) * this.columns + col;
-      
-      if (matrixIndex >= this.resultMatrix.length) {
-        continue;
-      }
-      
-      const symbolCode = this.resultMatrix[matrixIndex];
+      const symbolCode = reelSymbolsForColumn[row];
 
       if (symbolCode == null || symbolCode === '') {
         appliedSymbols.push(null);
@@ -1920,41 +1724,54 @@ export default class GridRenderer {
    * @returns {Promise<void>} Resolves when cascade step completes
    */
   playCascadeStep(
-    nextMatrix,
+    nextReelSymbols,
     assets,
     { fadeDuration = CASCADE_FADE_DURATION, dropDuration = CASCADE_DROP_DURATION } = {}
   ) {
-    // For Megaways, matrix may have variable size (maxRows * columns)
-    const expectedSize = this.maxRows * this.columns;
-    if (!nextMatrix || nextMatrix.length < this.columns) {
+    // nextReelSymbols is now a jagged array: nextReelSymbols[column][row]
+    if (!nextReelSymbols || !Array.isArray(nextReelSymbols) || nextReelSymbols.length < this.columns) {
+      console.warn('[GridRenderer] playCascadeStep: Invalid next reel symbols');
       return Promise.resolve();
     }
 
-    if (!this.lastSymbolMatrix || this.lastSymbolMatrix.length !== nextMatrix.length) {
-      this.renderGridFromMatrix(nextMatrix, assets);
+    // Check if we have previous state
+    if (!this.resultMatrix || !Array.isArray(this.resultMatrix) || this.resultMatrix.length < this.columns) {
+      this.renderGridFromMatrix(nextReelSymbols, assets);
       return Promise.resolve();
     }
 
     this.enterGridMode();
     this.currentAssets = assets;
 
-    const prevMatrix = this.lastSymbolMatrix.slice();
-    const removedIndices = new Set(
-      Array.isArray(this.pendingWinningIndices) ? this.pendingWinningIndices : []
-    );
-
-    if (removedIndices.size === 0) {
-      for (let idx = 0; idx < prevMatrix.length; idx += 1) {
-        if (prevMatrix[idx] !== nextMatrix[idx]) {
-          removedIndices.add(idx);
+    const prevReelSymbols = this.resultMatrix; // Already jagged array
+    const removedPositions = new Set(); // Store as "col,row" strings
+    
+    // Find removed symbols by comparing prev and next
+    for (let col = 0; col < this.columns && col < prevReelSymbols.length && col < nextReelSymbols.length; col++) {
+      const prevReel = prevReelSymbols[col];
+      const nextReel = nextReelSymbols[col];
+      if (!Array.isArray(prevReel) || !Array.isArray(nextReel)) continue;
+      
+      const maxRows = Math.max(prevReel.length, nextReel.length);
+      for (let row = 0; row < maxRows; row++) {
+        const prevSymbol = row < prevReel.length ? prevReel[row] : null;
+        const nextSymbol = row < nextReel.length ? nextReel[row] : null;
+        
+        // If symbol was removed (was present, now null or different)
+        if (prevSymbol && prevSymbol !== nextSymbol) {
+          removedPositions.add(`${col},${row}`);
         }
       }
     }
 
     const fadePromises = [];
-    removedIndices.forEach((idx) => {
-      const row = Math.floor(idx / this.columns);
-      const col = idx % this.columns;
+    removedPositions.forEach((pos) => {
+      const [colStr, rowStr] = pos.split(',');
+      const col = parseInt(colStr, 10);
+      const row = parseInt(rowStr, 10);
+      
+      if (!Number.isFinite(col) || !Number.isFinite(row)) return;
+      
       const sprite = this._getGridSpriteAt(row, col);
       if (!sprite) {
         return;
@@ -1967,19 +1784,29 @@ export default class GridRenderer {
 
       fadePromises.push(
         new Promise((resolve) => {
-          this.tweenTo(
-            sprite,
-            'alpha',
-            0,
-            fadeDuration * 1000,
-            (t) => t,
-            null,
-            () => {
-              sprite.visible = false;
-              sprite.alpha = 0;
-              resolve();
+          // Scale up (pop) before fade-out for "Pragmatic Play" feel
+          const originalScale = sprite.scale.x;
+          gsap.to(sprite.scale, {
+            x: originalScale * 1.15,
+            y: originalScale * 1.15,
+            duration: 0.1,
+            ease: 'power2.out',
+            onComplete: () => {
+              // Rapid fade-out (0.2s instead of slow fade)
+              gsap.to(sprite, {
+                alpha: 0,
+                duration: 0.2,
+                ease: 'power2.in',
+                onComplete: () => {
+                  sprite.visible = false;
+                  sprite.alpha = 0;
+                  sprite.scale.x = originalScale;
+                  sprite.scale.y = originalScale;
+                  resolve();
+                }
+              });
             }
-          );
+          });
         })
       );
     });
@@ -1991,54 +1818,45 @@ export default class GridRenderer {
       .then(() => {
         const dropPromises = [];
 
-        for (let col = 0; col < this.columns; col++) {
+        for (let col = 0; col < this.columns && col < prevReelSymbols.length && col < nextReelSymbols.length; col++) {
           const reel = this.reels[col];
           if (!reel) {
             continue;
           }
           
+          const prevReel = prevReelSymbols[col];
+          const nextReel = nextReelSymbols[col];
+          if (!Array.isArray(prevReel) || !Array.isArray(nextReel)) {
+            continue;
+          }
+          
           // Get actual reel height for this column (variable for Megaways)
-          const reelHeight = reel.height || (this.reelHeights && this.reelHeights[col]) || this.rows;
+          const reelHeight = Math.max(prevReel.length, nextReel.length);
           
           if (!reel.gridSprites) {
             reel.gridSprites = new Array(reelHeight).fill(null);
+          } else if (reel.gridSprites.length < reelHeight) {
+            reel.gridSprites = [...reel.gridSprites, ...new Array(reelHeight - reel.gridSprites.length).fill(null)];
           }
 
           const prevCol = [];
           const nextCol = [];
 
-          // Use variable reel height instead of fixed this.rows
+          // Build column data from jagged arrays
           for (let row = 0; row < reelHeight; row++) {
-            // Calculate index in the flat matrix - need to account for variable structure
-            // For Megaways, the matrix might be structured differently
-            // Try to find the correct index for this row/col combination
-            let idx = -1;
-            
-            // Try row-major order first (standard approach)
-            const rowMajorIdx = row * this.columns + col;
-            if (rowMajorIdx < prevMatrix.length && rowMajorIdx < nextMatrix.length) {
-              idx = rowMajorIdx;
-            } else {
-              // If that doesn't work, we need to calculate based on cumulative heights
-              // For now, use a simpler approach: calculate based on maxRows
-              const maxRows = this.maxRows || this.rows;
-              idx = row * this.columns + col;
-              if (idx >= prevMatrix.length) {
-                continue; // Skip if index is out of bounds
-              }
-            }
+            const prevSymbol = row < prevReel.length ? prevReel[row] : null;
+            const nextSymbol = row < nextReel.length ? nextReel[row] : null;
+            const posKey = `${col},${row}`;
             
             prevCol.push({
               row,
-              idx,
-              symbolCode: prevMatrix[idx],
+              symbolCode: prevSymbol,
               sprite: reel.gridSprites[row],
-              isRemoved: removedIndices.has(idx)
+              isRemoved: removedPositions.has(posKey)
             });
             nextCol.push({
               row,
-              idx,
-              symbolCode: nextMatrix[idx]
+              symbolCode: nextSymbol
             });
           }
 
@@ -2077,17 +1895,30 @@ export default class GridRenderer {
               reel.gridSprites[cell.row] = null;
             }
 
+            // Stagger drops by row for realistic physics (lower rows hit first)
+            const staggerDelay = cell.row * 0.05; // 50ms delay per row
+            
             dropPromises.push(
               new Promise((resolve) => {
-                this.tweenTo(
-                  sprite,
-                  'y',
-                  targetY,
-                  dropDuration * 1000,
-                  this.backout(0.8),
-                  null,
-                  resolve
-                );
+                // Use GSAP directly for bounce.out easing and stagger
+                gsap.to(sprite, {
+                  y: targetY,
+                  duration: dropDuration,
+                  delay: staggerDelay,
+                  ease: 'bounce.out', // Bounce on landing for realistic physics
+                  onComplete: () => {
+                    // Small bounce effect on landing (scale animation)
+                    gsap.to(sprite.scale, {
+                      x: sprite.scale.x * 1.05,
+                      y: sprite.scale.y * 1.05,
+                      duration: 0.1,
+                      yoyo: true,
+                      repeat: 1,
+                      ease: 'power2.out',
+                      onComplete: resolve
+                    });
+                  }
+                });
               })
             );
           });
@@ -2095,23 +1926,13 @@ export default class GridRenderer {
           const rowsNeedingNew = targetRows.filter((row) => !occupiedRows.has(row) && row < reelHeight);
 
           rowsNeedingNew.forEach((row) => {
-            // Calculate index based on variable reel structure
-            // For Megaways, we need to handle variable heights per column
-            let idx = -1;
-            if (row < reelHeight) {
-              // Use row-major order, but only for valid rows within this reel's height
-              const maxRows = this.maxRows || this.rows;
-              idx = row * this.columns + col;
-              // Ensure index is within bounds
-              if (idx >= nextMatrix.length) {
-                return; // Skip if out of bounds
-              }
-            } else {
-              return; // Skip rows beyond this reel's height
+            // Get symbol from jagged array
+            if (row >= nextReel.length) {
+              return; // Skip if out of bounds
             }
             
-            const symbolCode = nextMatrix[idx];
-            if (!symbolCode) {
+            const symbolCode = nextReel[row];
+            if (!symbolCode || symbolCode === 'NULL' || symbolCode === '') {
               return;
             }
 
@@ -2148,24 +1969,37 @@ export default class GridRenderer {
             sprite.alpha = 1;
             sprite.visible = true;
 
+            // Stagger drops by row for realistic physics (lower rows hit first)
+            const staggerDelay = row * 0.05; // 50ms delay per row
+            
             dropPromises.push(
               new Promise((resolve) => {
-                this.tweenTo(
-                  sprite,
-                  'y',
-                  targetY,
-                  dropDuration * 1000,
-                  this.backout(0.8),
-                  null,
-                  resolve
-                );
+                // Use GSAP directly for bounce.out easing and stagger
+                gsap.to(sprite, {
+                  y: targetY,
+                  duration: dropDuration,
+                  delay: staggerDelay,
+                  ease: 'bounce.out', // Bounce on landing for realistic physics
+                  onComplete: () => {
+                    // Small bounce effect on landing (scale animation)
+                    gsap.to(sprite.scale, {
+                      x: sprite.scale.x * 1.05,
+                      y: sprite.scale.y * 1.05,
+                      duration: 0.1,
+                      yoyo: true,
+                      repeat: 1,
+                      ease: 'power2.out',
+                      onComplete: resolve
+                    });
+                  }
+                });
               })
             );
           });
 
-          for (let row = 0; row < this.rows; row++) {
-            const idx = row * this.columns + col;
-            if (nextMatrix[idx] == null && reel.gridSprites[row]) {
+          // Clean up sprites that are no longer needed
+          for (let row = 0; row < reelHeight; row++) {
+            if ((row >= nextReel.length || !nextReel[row] || nextReel[row] === 'NULL') && reel.gridSprites[row]) {
               reel.gridSprites[row].visible = false;
               reel.gridSprites[row] = null;
             }
@@ -2173,8 +2007,19 @@ export default class GridRenderer {
         }
 
         return Promise.all(dropPromises).then(() => {
-          this.lastSymbolMatrix = [...nextMatrix];
-          this.resultMatrix = [...nextMatrix];
+          // Store jagged array structure
+          this.resultMatrix = nextReelSymbols.map(reel => [...reel]);
+          // Also store flattened for compatibility (temporary)
+          const flattened = [];
+          for (let col = 0; col < nextReelSymbols.length; col++) {
+            const reel = nextReelSymbols[col];
+            if (Array.isArray(reel)) {
+              for (let row = 0; row < reel.length; row++) {
+                flattened.push(reel[row] || null);
+              }
+            }
+          }
+          this.lastSymbolMatrix = flattened;
           this.pendingWinningIndices = null;
         });
       });

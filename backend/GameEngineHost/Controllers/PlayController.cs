@@ -33,52 +33,50 @@ public sealed class PlayController : ControllerBase
         Console.WriteLine($"[GameEngine] WaysToWin: {response.Results.WaysToWin ?? 0}");
         Console.WriteLine($"[GameEngine] ReelHeights: [{string.Join(", ", response.Results.ReelHeights ?? Array.Empty<int>())}]");
         
-        // Log final grid symbols being sent to frontend
-        if (response.Results.FinalGridSymbols != null && response.Results.FinalGridSymbols.Count > 0)
+        // Log reel symbols being sent to frontend (jagged array structure)
+        if (response.Results.ReelSymbols != null && response.Results.ReelSymbols.Count > 0)
         {
-            Console.WriteLine($"[GameEngine] FinalGridSymbols count: {response.Results.FinalGridSymbols.Count}");
-            Console.WriteLine($"[GameEngine] FinalGridSymbols (first 30): [{string.Join(", ", response.Results.FinalGridSymbols.Take(30))}]");
+            Console.WriteLine($"[GameEngine] ReelSymbols count: {response.Results.ReelSymbols.Count} columns");
             
             if (response.Results.ReelHeights != null && response.Results.ReelHeights.Count > 0)
             {
                 int columns = response.Results.ReelHeights.Count;
-                int maxHeight = response.Results.ReelHeights.Max();
                 Console.WriteLine($"[GameEngine] Expected frontend display:");
                 
                 // Top reel is separate - use TopReelSymbols array
                 if (response.Results.TopReelSymbols != null)
                 {
-                    Console.WriteLine($"[GameEngine]   TOP REEL (row {maxHeight}, columns 1-4): [{string.Join(", ", response.Results.TopReelSymbols)}]");
-                    Console.WriteLine($"[GameEngine]     Note: Frontend should use TopReelSymbols array for top reel, NOT finalGridSymbols");
+                    Console.WriteLine($"[GameEngine]   TOP REEL (columns 1-4): [{string.Join(", ", response.Results.TopReelSymbols)}]");
+                    Console.WriteLine($"[GameEngine]     Note: Frontend should use TopReelSymbols array for top reel");
                 }
                 
-                // Main reels use finalGridSymbols
-                for (int col = 0; col < columns; col++)
+                // Main reels use ReelSymbols jagged array
+                for (int col = 0; col < columns && col < response.Results.ReelSymbols.Count; col++)
                 {
+                    var reelSymbols = response.Results.ReelSymbols[col];
                     int reelHeight = response.Results.ReelHeights[col];
-                    var reelSymbols = new List<string>();
-                    for (int row = 0; row < reelHeight; row++)
+                    
+                    if (reelSymbols != null)
                     {
-                        int matrixRow = row;
-                        int idx = (maxHeight - matrixRow) * columns + col;
-                        if (idx >= 0 && idx < response.Results.FinalGridSymbols.Count)
-                        {
-                            string symbol = response.Results.FinalGridSymbols[idx];
-                            if (symbol != null)
-                            {
-                                reelSymbols.Add(symbol);
-                            }
-                            else
-                            {
-                                reelSymbols.Add("NULL");
-                            }
-                        }
-                        else
-                        {
-                            reelSymbols.Add($"OUT_OF_BOUNDS(idx={idx})");
-                        }
+                        var symbolList = reelSymbols.Take(reelHeight).ToList();
+                        Console.WriteLine($"[GameEngine]   Reel {col} (height {reelHeight}): [{string.Join(", ", symbolList)}] (row 0=bottom, row {reelHeight-1}=top)");
                     }
-                    Console.WriteLine($"[GameEngine]   Reel {col} (height {reelHeight}): [{string.Join(", ", reelSymbols)}] (row 0=bottom, row {reelHeight-1}=top)");
+                    else
+                    {
+                        Console.WriteLine($"[GameEngine]   Reel {col} (height {reelHeight}): NULL");
+                    }
+                }
+            }
+            else
+            {
+                // Non-Megaways: log all columns
+                for (int col = 0; col < response.Results.ReelSymbols.Count; col++)
+                {
+                    var reelSymbols = response.Results.ReelSymbols[col];
+                    if (reelSymbols != null)
+                    {
+                        Console.WriteLine($"[GameEngine]   Reel {col}: [{string.Join(", ", reelSymbols)}]");
+                    }
                 }
             }
         }

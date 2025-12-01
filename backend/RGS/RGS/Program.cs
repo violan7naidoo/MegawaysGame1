@@ -168,52 +168,50 @@ app.MapPost("/{gameId}/play",
             Console.WriteLine($"[RGS] WaysToWin: {engineResponse.Results.WaysToWin ?? 0}");
             Console.WriteLine($"[RGS] ReelHeights: [{string.Join(", ", engineResponse.Results.ReelHeights ?? Array.Empty<int>())}]");
             
-            // Log final grid symbols being sent to frontend
-            if (engineResponse.Results.FinalGridSymbols != null && engineResponse.Results.FinalGridSymbols.Count > 0)
+            // Log reel symbols being sent to frontend (jagged array structure)
+            if (engineResponse.Results.ReelSymbols != null && engineResponse.Results.ReelSymbols.Count > 0)
             {
-                Console.WriteLine($"[RGS] FinalGridSymbols count: {engineResponse.Results.FinalGridSymbols.Count}");
-                Console.WriteLine($"[RGS] FinalGridSymbols (first 30): [{string.Join(", ", engineResponse.Results.FinalGridSymbols.Take(30))}]");
+                Console.WriteLine($"[RGS] ReelSymbols count: {engineResponse.Results.ReelSymbols.Count} columns");
                 
                 if (engineResponse.Results.ReelHeights != null && engineResponse.Results.ReelHeights.Count > 0)
                 {
                     int columns = engineResponse.Results.ReelHeights.Count;
-                    int maxHeight = engineResponse.Results.ReelHeights.Max();
                     Console.WriteLine($"[RGS] Expected frontend display (what should be visible):");
                     
                     // Top reel is separate - use TopReelSymbols array
                     if (engineResponse.Results.TopReelSymbols != null)
                     {
-                        Console.WriteLine($"[RGS]   TOP REEL (row {maxHeight}, columns 1-4): [{string.Join(", ", engineResponse.Results.TopReelSymbols)}]");
-                        Console.WriteLine($"[RGS]     Note: Frontend should use TopReelSymbols array for top reel, NOT finalGridSymbols");
+                        Console.WriteLine($"[RGS]   TOP REEL (columns 1-4): [{string.Join(", ", engineResponse.Results.TopReelSymbols)}]");
+                        Console.WriteLine($"[RGS]     Note: Frontend should use TopReelSymbols array for top reel");
                     }
                     
-                    // Main reels use finalGridSymbols
-                    for (int col = 0; col < columns; col++)
+                    // Main reels use ReelSymbols jagged array
+                    for (int col = 0; col < columns && col < engineResponse.Results.ReelSymbols.Count; col++)
                     {
+                        var reelSymbols = engineResponse.Results.ReelSymbols[col];
                         int reelHeight = engineResponse.Results.ReelHeights[col];
-                        var reelSymbols = new List<string>();
-                        for (int row = 0; row < reelHeight; row++)
+                        
+                        if (reelSymbols != null)
                         {
-                            int matrixRow = row;
-                            int idx = (maxHeight - matrixRow) * columns + col;
-                            if (idx >= 0 && idx < engineResponse.Results.FinalGridSymbols.Count)
-                            {
-                                string symbol = engineResponse.Results.FinalGridSymbols[idx];
-                                if (symbol != null)
-                                {
-                                    reelSymbols.Add(symbol);
-                                }
-                                else
-                                {
-                                    reelSymbols.Add("NULL");
-                                }
-                            }
-                            else
-                            {
-                                reelSymbols.Add($"OUT_OF_BOUNDS(idx={idx})");
-                            }
+                            var symbolList = reelSymbols.Take(reelHeight).ToList();
+                            Console.WriteLine($"[RGS]   Reel {col} (height {reelHeight}): [{string.Join(", ", symbolList)}] (row 0=bottom, row {reelHeight-1}=top)");
                         }
-                        Console.WriteLine($"[RGS]   Reel {col} (height {reelHeight}): [{string.Join(", ", reelSymbols)}] (row 0=bottom, row {reelHeight-1}=top)");
+                        else
+                        {
+                            Console.WriteLine($"[RGS]   Reel {col} (height {reelHeight}): NULL");
+                        }
+                    }
+                }
+                else
+                {
+                    // Non-Megaways: log all columns
+                    for (int col = 0; col < engineResponse.Results.ReelSymbols.Count; col++)
+                    {
+                        var reelSymbols = engineResponse.Results.ReelSymbols[col];
+                        if (reelSymbols != null)
+                        {
+                            Console.WriteLine($"[RGS]   Reel {col}: [{string.Join(", ", reelSymbols)}]");
+                        }
                     }
                 }
             }

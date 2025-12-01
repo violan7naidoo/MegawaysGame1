@@ -119,8 +119,8 @@ export default class AnimationManager {
       for (let i = 0; i < cascades.length; i += 1) {
         const step = cascades[i];
 
-        if (Array.isArray(step.gridBefore)) {
-          this.grid.renderGridFromMatrix(step.gridBefore, this.assets);
+        if (Array.isArray(step.reelSymbolsBefore)) {
+          this.grid.renderGridFromMatrix(step.reelSymbolsBefore, this.assets);
         }
 
         const holdDuration = this.isTurboMode ? STATIC_HOLD_DURATION * TURBO_MULTIPLIER : STATIC_HOLD_DURATION;
@@ -165,10 +165,10 @@ export default class AnimationManager {
         });
         this.grid.pendingWinningIndices = winningIndices;
 
-        if (Array.isArray(step.gridAfter)) {
+        if (Array.isArray(step.reelSymbolsAfter)) {
           const fadeDuration = this.isTurboMode ? CASCADE_FADE_DURATION * TURBO_MULTIPLIER : CASCADE_FADE_DURATION;
           const dropDuration = this.isTurboMode ? CASCADE_DROP_DURATION * TURBO_MULTIPLIER : CASCADE_DROP_DURATION;
-          await this.grid.playCascadeStep(step.gridAfter, this.assets, {
+          await this.grid.playCascadeStep(step.reelSymbolsAfter, this.assets, {
             fadeDuration: fadeDuration,
             dropDuration: dropDuration
           });
@@ -196,7 +196,7 @@ export default class AnimationManager {
    * 
    * @param {Object} step - Cascade step object
    * @param {Array} [step.winsAfterCascade] - Array of win objects
-   * @param {Array} [step.gridBefore] - Grid state before cascade
+   * @param {Array} [step.reelSymbolsBefore] - Reel symbols before cascade (jagged array)
    * @returns {Promise<void>} Resolves when highlight animation completes
    */
   highlightWins(step) {
@@ -226,9 +226,9 @@ export default class AnimationManager {
       }
     });
 
-    // If no explicit indices, try to match by symbol code
-    if (winCells.length === 0 && Array.isArray(step.gridBefore)) {
-      const grid = step.gridBefore;
+    // If no explicit indices, try to match by symbol code in jagged array
+    if (winCells.length === 0 && Array.isArray(step.reelSymbolsBefore)) {
+      const reelSymbols = step.reelSymbolsBefore;
       wins.forEach((win) => {
         if (!win?.symbolCode) {
           return;
@@ -236,20 +236,21 @@ export default class AnimationManager {
         const targetSymbol = win.symbolCode;
         const targetCount = Number.isFinite(win.count) ? win.count : null;
         const matches = [];
-        // Find all matching symbols in grid
-        for (let idx = 0; idx < grid.length; idx += 1) {
-          if (grid[idx] === targetSymbol) {
-            matches.push(idx);
+        // Find all matching symbols in jagged array structure
+        for (let col = 0; col < reelSymbols.length; col += 1) {
+          const reel = reelSymbols[col];
+          if (Array.isArray(reel)) {
+            for (let row = 0; row < reel.length; row += 1) {
+              if (reel[row] === targetSymbol) {
+                matches.push({ row, col });
+              }
+            }
           }
         }
         // Use first N matches if count is specified
         const indicesToUse =
           targetCount && matches.length > targetCount ? matches.slice(0, targetCount) : matches;
-        indicesToUse.forEach((idx) => {
-          const row = Math.floor(idx / this.grid.columns);
-          const col = idx % this.grid.columns;
-          winCells.push({ row, col });
-        });
+        winCells.push(...indicesToUse);
       });
     }
 
