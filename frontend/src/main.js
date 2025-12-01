@@ -49,12 +49,14 @@ async function main() {
   }
   
   // Initialize PixiJS WebGL application
-  // This creates the rendering context and canvas element
+  // Use window size for canvas, scaling will be handled by SceneManager
   const app = new PIXI.Application();
   await app.init({
+    resolution: window.devicePixelRatio || 1,
+    autoDensity: true,
     background: 0x030604, // Dark background color as fallback
     backgroundAlpha: 1,
-    resizeTo: window, // Automatically resize canvas to window size
+    resizeTo: window, // Automatically resize canvas to window size (handles responsive scaling)
     antialias: true // Enable anti-aliasing for smoother graphics
   });
   canvasParent.appendChild(app.canvas);

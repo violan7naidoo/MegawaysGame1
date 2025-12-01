@@ -576,32 +576,43 @@ export default class SceneManager {
       return;
     }
 
-    // ===== SLOT CANVAS SIZE ADJUSTMENT =====
-    // Increase this value to make the slot canvas bigger (e.g., 1.2 = 20% bigger, 1.5 = 50% bigger)
-    // Change this value and save to see the effect!
-    const SLOT_SCALE = 1.15;  // <-- CHANGE THIS: 1.0 = normal, 1.2 = 20% bigger, 1.5 = 50% bigger
-    
-    // ===== SLOT CANVAS POSITION ADJUSTMENT =====
-    // Y position offset - negative values move up, positive values move down
-    // Change this value and save to see the effect!
-    const SLOT_Y_OFFSET = 0;  // <-- CHANGE THIS: 0 = centered, -100 = move up 100px, 100 = move down 100px
-
     const rendererWidth = this.app.renderer.width;
     const rendererHeight = this.app.renderer.height;
     
-    // Apply scale to the entire slot canvas
-    this.sceneLayer.scale.set(SLOT_SCALE);
+    // Use actual grid size from GridRenderer (includes all reels and top reel)
+    const actualGridWidth = this.gridSize.width;
+    const actualGridHeight = this.gridSize.height;
     
-    // Calculate offsets based on scaled size to center the grid
-    const scaledWidth = this.gridSize.width * SLOT_SCALE;
-    const scaledHeight = this.gridSize.height * SLOT_SCALE;
-    const offsetX = Math.max((rendererWidth - scaledWidth) / 2, 0);
-    const offsetY = Math.max((rendererHeight - scaledHeight) / 2, 0);
+    // Reserve space for UI elements
+    // Bottom panel: 120px from bottom + ~100px height (spin button) = ~220px
+    // Bottom controls: 30px from bottom + ~50px height = ~80px
+    // Top HUD: ~80px height
+    const bottomUIHeight = 250; // Reserve 250px for bottom UI (bet, spin, total win, controls)
+    const topUIHeight = 80; // Reserve 80px for top HUD
+    const sidePadding = 20; // Small padding on sides
     
-    // Round to prevent sub-pixel positioning that can cause jitter
-    this.sceneLayer.x = Math.round(offsetX);
-    // Center vertically - offsetY already centers it, just add any manual offset
-    this.sceneLayer.y = Math.round(offsetY) + SLOT_Y_OFFSET;
+    // Calculate available space for grid
+    const availableWidth = rendererWidth - (sidePadding * 2);
+    const availableHeight = rendererHeight - topUIHeight - bottomUIHeight;
+    
+    // Calculate scale to fit grid in available space
+    const scaleX = availableWidth / actualGridWidth;
+    const scaleY = availableHeight / actualGridHeight;
+    const scale = Math.min(scaleX, scaleY, 1.0); // Don't scale up beyond 100%
+    
+    this.sceneLayer.scale.set(scale);
+    
+    // Center the container
+    const scaledWidth = actualGridWidth * scale;
+    const scaledHeight = actualGridHeight * scale;
+    
+    // Center X with side padding
+    this.sceneLayer.x = (rendererWidth - scaledWidth) / 2;
+    
+    // Position Y: top UI + center remaining space
+    // This ensures grid never overlaps with bottom UI
+    const remainingHeight = rendererHeight - topUIHeight - bottomUIHeight;
+    this.sceneLayer.y = topUIHeight + (remainingHeight - scaledHeight) / 2;
   }
 
   // Removed renderPlaceholderBoard - reels are initialized with random symbols

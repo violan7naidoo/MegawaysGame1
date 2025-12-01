@@ -26,11 +26,11 @@ import { gsap } from 'gsap';
 import SymbolRenderer from './SymbolRenderer.js';
 
 /** Default cell size in pixels */
-const DEFAULT_CELL_SIZE = 140;
+const DEFAULT_CELL_SIZE = 120; // Adjusted for proper viewport fitting (Pragmatic uses ~100-120px)
 /** Default padding around symbols in pixels */
 const DEFAULT_SYMBOL_PADDING = 0;
 /** Default gap between cells in pixels */
-const DEFAULT_CELL_GAP = 5;
+const DEFAULT_CELL_GAP = 4; // Very tight gaps for Pragmatic Play look
 
 // Spin animation speed controls
 /** Base spin duration in milliseconds (lower = faster) */
@@ -119,10 +119,14 @@ export default class GridRenderer {
     this.topReelTargetPosition = 0; // Target position for spin animation
     this.topReelBlur = null; // Blur filter for top reel
     this.topReelTween = null; // GSAP tween for top reel animation
+    // Grid size includes main reels only (top reel is positioned separately above)
     this.size = {
       width: this.reelWidth * this.columns,
       height: this.symbolSize * this.maxRows
     };
+    // Total height including top reel (top reel is always 1 symbol height above)
+    // Top reel covers columns 1-4, so it adds 1 symbol height to total
+    this.totalHeight = this.symbolSize * this.maxRows + this.symbolSize;
     this.tableSprite = null;
     this.tablePadding = tablePadding;
   }
@@ -443,15 +447,18 @@ export default class GridRenderer {
       mask.beginFill(0xffffff);
       const maskY = this.symbolSize; // Always start at symbolSize to hide buffer
       // Use maxRows for mask height to ensure all symbols are properly clipped
+      // This ensures symbols never show outside the grid during spinning
       const maskHeight = this.symbolSize * this.maxRows;
       mask.drawRect(0, maskY, this.reelWidth, maskHeight);
       mask.endFill();
       // Position mask in local coordinates (relative to reelContainer)
       mask.x = 0;
       mask.y = 0;
-      // Add mask as child of reelContainer FIRST (before other children)
+      // CRITICAL: Add mask as child of reelContainer FIRST (before other children)
+      // This ensures the mask is in the correct coordinate space
       reelContainer.addChildAt(mask, 0);
       // Set mask on reelContainer - this will clip all children (spinLayer, gridLayer)
+      // The mask property clips everything outside the mask rectangle
       reelContainer.mask = mask;
 
       // Ensure reel containers are added after table sprite so they render on top
@@ -484,8 +491,11 @@ export default class GridRenderer {
         height: reelHeight // Store reel height
       };
 
-      // Build symbols for this reel - reelHeight + 1 symbols (including buffer)
-      const symbolCount = reelHeight + 1;
+      // Build symbols for this reel
+      // CRITICAL: Create enough symbols to fill the visible area (maxRows) plus buffer for smooth looping
+      // We need maxRows + 2 symbols: maxRows visible + 1 buffer above + 1 buffer below
+      // This ensures smooth scrolling without gaps, but the mask will clip to only show maxRows
+      const symbolCount = this.maxRows + 2; // Enough for maxRows visible + buffers
       for (let j = 0; j < symbolCount; j++) {
         const texture = slotTextures[Math.floor(Math.random() * slotTextures.length)];
         const symbol = new PIXI.Sprite(texture);
@@ -497,7 +507,8 @@ export default class GridRenderer {
         
         // Position symbols using 0-based coordinate system
         // Row 0 (bottom) should start at symbolSize (mask start) to align with visible area
-        // Buffer symbol for looping is at j=reelHeight, which is outside the visible mask
+        // Symbols are positioned from symbolSize (visible start) upward
+        // The mask will clip anything outside [symbolSize, symbolSize + maxRows * symbolSize]
         symbol.y = this.symbolSize + (j * this.symbolSize);
         symbol.x = Math.round((this.reelWidth - symbol.width) / 2);
         
@@ -605,20 +616,17 @@ export default class GridRenderer {
           const prevy = symbol.y;
           // Position symbols starting from symbolSize (mask start) to align with visible area
           // Row 0 (bottom) is at symbolSize, row 1 is at 2*symbolSize, etc.
-          // The modulo loop handles the buffer symbol, which stays outside the visible mask
+          // The modulo loop handles wrapping for smooth scrolling
           // Calculate position with wrapping, offset by symbolSize to align with mask
           const baseY = this.symbolSize; // Start at mask start position
-          const newY = baseY + ((reel.position + j) % reel.symbols.length) * this.symbolSize;
+          const symbolIndex = (reel.position + j) % reel.symbols.length;
+          const newY = baseY + symbolIndex * this.symbolSize;
           symbol.y = newY;
           
-          // Ensure symbol stays within reasonable bounds (mask will clip, but this prevents extreme positions)
-          // Symbols should be between symbolSize (visible start) and symbolSize + (maxRows + 1) * symbolSize (buffer below)
-          const maxY = this.symbolSize + (this.maxRows + 1) * this.symbolSize;
-          if (symbol.y < this.symbolSize - this.symbolSize || symbol.y > maxY) {
-            // Wrap to valid range if somehow out of bounds
-            const wrappedY = ((symbol.y - baseY) % (reel.symbols.length * this.symbolSize) + reel.symbols.length * this.symbolSize) % (reel.symbols.length * this.symbolSize);
-            symbol.y = baseY + wrappedY;
-          }
+          // CRITICAL: The mask will clip symbols outside the visible area
+          // We don't need to manually constrain positions here - the mask handles it
+          // The mask covers: [symbolSize, symbolSize + maxRows * symbolSize]
+          // Any symbol outside this range will be automatically clipped by the mask
 
           // Update textures randomly during spin, but ONLY if final textures haven't been applied
           // Once resultMatrix is set, we should use final textures, not random ones
@@ -1087,16 +1095,29 @@ export default class GridRenderer {
         continue;
       }
 
-      const reelHeight = reelSymbolsForColumn.length;
+      const reelSymbolCount = reelSymbolsForColumn.length;
+
+      // --- CRITICAL FIX: DYNAMIC SIZING ---
+      // Calculate the height of the visible area for this reel
+      // We assume the reel container should fill the same height regardless of symbol count
+      const totalReelPixelHeight = this.maxRows * this.symbolSize; 
+      
+      // Calculate height per symbol for THIS specific spin
+      // If we have 7 symbols, they must shrink to fit. If 2, they grow.
+      const dynamicSymbolHeight = totalReelPixelHeight / reelSymbolCount;
+      // -------------------------------------
+
       if (!reel.gridSprites) {
-        reel.gridSprites = new Array(reelHeight).fill(null);
-      } else if (reel.gridSprites.length < reelHeight) {
-        // Extend array if needed
-        reel.gridSprites = [...reel.gridSprites, ...new Array(reelHeight - reel.gridSprites.length).fill(null)];
+        reel.gridSprites = new Array(reelSymbolCount).fill(null);
+      } else if (reel.gridSprites.length < reelSymbolCount) {
+        reel.gridSprites = [...reel.gridSprites, ...new Array(reelSymbolCount - reel.gridSprites.length).fill(null)];
       }
 
-      // Render each symbol in this reel (row 0 = bottom, row N-1 = top)
-      for (let row = 0; row < reelHeight; row++) {
+      // Render each symbol in this reel
+      // Debug: Log all symbols for this reel
+      console.log(`[GridRenderer] renderGridFromMatrix: Reel ${col} (height ${reelSymbolCount}):`, reelSymbolsForColumn);
+      
+      for (let row = 0; row < reelSymbolCount; row++) {
         const symbolCode = reelSymbolsForColumn[row];
 
         if (symbolCode == null || symbolCode === '' || symbolCode === 'NULL') {
@@ -1124,11 +1145,46 @@ export default class GridRenderer {
           continue;
         }
 
-        const scale = Math.min(this.symbolSize / texture.width, this.symbolSize / texture.height);
         sprite.texture = texture;
-        sprite.scale.set(scale);
+
+        // --- APPLY DYNAMIC SCALE ---
+        // Scale sprite to fit the NEW dynamic height
+        const scaleX = (this.reelWidth) / texture.width;
+        const scaleY = (dynamicSymbolHeight) / texture.height;
+        // Use the smaller scale to fit within box, or scaleY to stretch/squash
+        sprite.scale.set(Math.min(scaleX, scaleY)); 
+        
+        // Center horizontally
         sprite.x = Math.round((this.reelWidth - sprite.width) / 2);
-        sprite.y = this._rowToY(row, col);
+
+        // --- POSITIONING ---
+        // Backend Row 0 is BOTTOM. Ticker positions row 0 at y = symbolSize (bottom of visible area)
+        // We need to match the ticker's positioning logic but with dynamic symbol heights
+        // Ticker: y = symbolSize + ((position + j) % count) * symbolSize
+        // For static grid with dynamic heights: y = symbolSize + row * dynamicSymbolHeight
+        // This puts row 0 at bottom (y = symbolSize), row 1 above it, etc.
+        
+        // Adjust for top reel offset if necessary
+        const hasTopReel = this.topReel && [1, 2, 3, 4].includes(col);
+        const topOffset = hasTopReel ? this.symbolSize : 0;
+        
+        // Position: row 0 at bottom (symbolSize), row 1 above it, etc.
+        // With dynamic heights, we need to calculate cumulative height
+        // Row 0 (backend bottom) should be at the bottom of the visible reel
+        // Row N-1 (backend top) should be at the top
+        // Since we're using dynamic heights, we need to position from bottom up
+        let yPosition = this.symbolSize; // Start at mask offset (bottom of visible area)
+        // For row 0, y = symbolSize (bottom)
+        // For row 1, y = symbolSize + dynamicSymbolHeight
+        // For row N-1, y = symbolSize + (N-1) * dynamicSymbolHeight (top)
+        yPosition += row * dynamicSymbolHeight;
+        sprite.y = yPosition + topOffset;
+        
+        // Debug: Log positioning for first and last row
+        if (row === 0 || row === reelSymbolCount - 1) {
+          console.log(`[GridRenderer] renderGridFromMatrix: Reel ${col}, Row ${row} positioned at y=${sprite.y} (topOffset=${topOffset})`);
+        }
+        
         sprite.visible = true;
         sprite.alpha = 1;
       }
@@ -1698,7 +1754,11 @@ export default class GridRenderer {
   }
 
   getSize() {
-    return { ...this.size };
+    // Return size including top reel height if present
+    return { 
+      width: this.size.width, 
+      height: this.totalHeight || this.size.height 
+    };
   }
 
   destroy() {
