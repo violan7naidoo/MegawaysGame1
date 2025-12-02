@@ -22,53 +22,73 @@
       }
       #game-root {
         background: #030604;
+        width: 100vw;
+        height: 100vh;
+        position: relative;
+        z-index: 1;
       }
       #game-root canvas {
         display: block;
         background: #030604;
-      }
-      #game-root {
-        width: 100vw;
-        height: 100vh;
         position: relative;
+        z-index: 1;
+        pointer-events: auto;
       }
       #top-hud {
         position: absolute;
         top: 20px;
         left: 20px;
-        display: flex;
+        display: none;
         gap: 12px;
         z-index: 5;
       }
-      #top-right-hud {
+      #game-info-bar {
         position: absolute;
-        top: 20px;
-        right: 20px;
+        bottom: 100px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 8px;
+        z-index: 10;
+        align-items: center;
+        pointer-events: none;
+      }
+      #game-info-bar .hud-card {
+        pointer-events: auto;
+      }
+      #top-right-hud {
+        position: fixed;
+        top: 10px;
+        right: 10px;
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 6px;
         align-items: flex-end;
-        z-index: 5;
+        z-index: 10;
+        pointer-events: none;
+      }
+      #top-right-hud > * {
+        pointer-events: auto;
       }
       #balance-box {
         background: rgba(8, 12, 15, 0.8);
         border: 1px solid rgba(255, 215, 0, 0.45);
-        border-radius: 12px;
-        padding: 12px 20px;
-        min-width: 160px;
-        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+        border-radius: 10px;
+        padding: 4px 10px;
+        min-width: 85px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
       }
       #timestamp-box {
         background: rgba(8, 12, 15, 0.8);
         border: 1px solid rgba(255, 215, 0, 0.45);
-        border-radius: 12px;
-        padding: 8px 16px;
-        font-size: 0.85rem;
-        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+        border-radius: 10px;
+        padding: 4px 10px;
+        font-size: 0.65rem;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
       }
       .icon-button {
-        width: 48px;
-        height: 48px;
+        width: 36px;
+        height: 36px;
         border-radius: 50%;
         border: 1px solid rgba(255, 215, 0, 0.4);
         background: rgba(0, 0, 0, 0.6);
@@ -77,7 +97,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 1.2rem;
+        font-size: 0.9rem;
         transition: all 0.2s;
       }
       .icon-button:hover {
@@ -210,48 +230,57 @@
       .hud-card {
         background: rgba(8, 12, 15, 0.8);
         border: 1px solid rgba(255, 215, 0, 0.45);
-        border-radius: 12px;
-        padding: 12px 20px;
-        min-width: 140px;
-        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+        border-radius: 10px;
+        padding: 4px 10px;
+        min-width: 85px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
       }
       .hud-label {
         display: block;
-        font-size: 0.75rem;
+        font-size: 0.55rem;
         letter-spacing: 0.08em;
         color: rgba(255, 255, 255, 0.7);
+        line-height: 1.2;
       }
       .hud-value {
-        font-size: 1.05rem;
+        font-size: 0.75rem;
+        line-height: 1.2;
       }
       #bottom-panel {
         position: absolute;
-        bottom: 120px;
+        bottom: 50px;
         left: 50%;
         transform: translateX(-50%);
-        display: flex;
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
         align-items: center;
-        gap: 24px;
-        z-index: 5;
+        gap: 12px;
+        z-index: 10;
+        pointer-events: none;
+      }
+      #bottom-panel > * {
+        pointer-events: auto;
       }
       .info-card {
-        width: 200px;
+        width: 100px;
         text-align: center;
         background: rgba(12, 18, 22, 0.85);
         border: 1px solid rgba(255, 215, 0, 0.35);
-        border-radius: 20px;
-        padding: 16px 12px;
+        border-radius: 16px;
+        padding: 8px 6px;
         box-shadow: inset 0 0 20px rgba(255, 204, 0, 0.15);
       }
       .info-card .label {
         display: block;
-        font-size: 0.75rem;
-        letter-spacing: 0.12em;
+        font-size: 0.6rem;
+        letter-spacing: 0.1em;
         color: rgba(255, 255, 255, 0.65);
+        line-height: 1.2;
       }
       .info-card .value {
-        font-size: 1.4rem;
-        margin-top: 6px;
+        font-size: 0.9rem;
+        margin-top: 4px;
+        line-height: 1.2;
       }
       .bet-amount-container {
         display: flex;
@@ -269,8 +298,8 @@
         color: #ffd34c;
       }
       .bet-adjust-button {
-        width: 32px;
-        height: 32px;
+        width: 28px;
+        height: 28px;
         border-radius: 50%;
         border: 1px solid rgba(255, 215, 0, 0.4);
         background: rgba(0, 0, 0, 0.6);
@@ -279,7 +308,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 1.2rem;
+        font-size: 1rem;
         transition: all 0.2s;
         font-weight: bold;
       }
@@ -291,17 +320,17 @@
         transform: scale(0.95);
       }
       .spin-button {
-        width: 220px;
-        height: 100px;
-        border-radius: 24px;
+        width: 120px;
+        height: 50px;
+        border-radius: 20px;
         border: none;
         background: linear-gradient(180deg, #ffd34c 0%, #c88a1e 100%);
         color: #231305;
-        font-size: 1.8rem;
+        font-size: 1rem;
         letter-spacing: 0.08em;
         text-transform: uppercase;
         cursor: pointer;
-        box-shadow: 0 15px 30px rgba(0, 0, 0, 0.4), inset 0 4px 8px rgba(255, 255, 255, 0.35);
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.4), inset 0 3px 6px rgba(255, 255, 255, 0.35);
       }
       .spin-button:disabled {
         opacity: 0.5;
@@ -309,21 +338,26 @@
       }
       #bottom-controls {
         position: absolute;
-        bottom: 30px;
+        bottom: 5px;
         width: 100%;
         display: flex;
         justify-content: center;
-        gap: 20px;
-        z-index: 5;
+        gap: 10px;
+        z-index: 10;
+        pointer-events: none;
+      }
+      #bottom-controls > * {
+        pointer-events: auto;
       }
       #btn-buy,
       .secondary-button {
         border: 1px solid rgba(255, 215, 0, 0.4);
         background: rgba(0, 0, 0, 0.6);
         color: #f8f5e7;
-        padding: 10px 16px;
+        padding: 6px 10px;
         border-radius: 999px;
         letter-spacing: 0.05em;
+        font-size: 0.75rem;
         cursor: pointer;
       }
       #btn-buy:disabled {
@@ -333,17 +367,17 @@
       .bet-modes {
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 6px;
         background: rgba(0, 0, 0, 0.5);
         border: 1px solid rgba(255, 215, 0, 0.3);
         border-radius: 999px;
-        padding: 8px 18px;
+        padding: 5px 12px;
       }
       .bet-modes label {
         display: flex;
         align-items: center;
         gap: 4px;
-        font-size: 0.85rem;
+        font-size: 0.7rem;
       }
       input[name="bet-mode"] {
         accent-color: #f1c550;
@@ -353,7 +387,10 @@
   </head>
   <body>
     <div id="game-root"></div>
-    <div id="top-hud">
+    <div id="top-hud" style="display: none;">
+      <!-- Hidden - elements moved to game-info-bar -->
+    </div>
+    <div id="game-info-bar">
       <div class="hud-card">
         <span class="hud-label">ROUND</span>
         <span class="hud-value" id="round-label">--</span>

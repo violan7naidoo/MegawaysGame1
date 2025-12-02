@@ -584,23 +584,34 @@ export default class SceneManager {
     const actualGridHeight = this.gridSize.height;
     
     // Reserve space for UI elements
-    // Bottom panel: 120px from bottom + ~100px height (spin button) = ~220px
-    // Bottom controls: 30px from bottom + ~50px height = ~80px
-    // Top HUD: ~80px height
-    const bottomUIHeight = 250; // Reserve 250px for bottom UI (bet, spin, total win, controls)
-    const topUIHeight = 80; // Reserve 80px for top HUD
+    // Top reel sits directly above grid (no margin) at -symbolSize
+    // Game info bar: ~35px height
+    // Bottom panel: ~50px height
+    // Bottom controls: ~35px height
+    // Total: ~120px for bottom safety margin
+    const bottomUIHeight = 120; // Reserve 120px for bottom UI (game info bar, bet, spin, total win, controls)
     const sidePadding = 20; // Small padding on sides
     
-    // Calculate available space for grid
+    // Calculate available space for grid (including space for top reel which is part of grid)
     const availableWidth = rendererWidth - (sidePadding * 2);
-    const availableHeight = rendererHeight - topUIHeight - bottomUIHeight;
+    // Reserve space for top reel (symbolSize) - will calculate scaled size after scale is determined
+    const tempAvailableHeight = rendererHeight - bottomUIHeight;
     
     // Calculate scale to fit grid in available space
+    // Allow grid to scale larger to fill more of the screen (75-80% target)
     const scaleX = availableWidth / actualGridWidth;
-    const scaleY = availableHeight / actualGridHeight;
-    const scale = Math.min(scaleX, scaleY, 1.0); // Don't scale up beyond 100%
+    const scaleY = tempAvailableHeight / (actualGridHeight + (this.gridRenderer?.symbolSize || 140));
+    const scale = Math.min(scaleX, scaleY); // Allow scaling beyond 100% if needed
     
     this.sceneLayer.scale.set(scale);
+    
+    // Calculate scaled symbol size for top reel space
+    const symbolSize = this.gridRenderer?.symbolSize || 140;
+    const scaledSymbolSize = symbolSize * scale;
+    const topUIHeight = scaledSymbolSize; // Reserve space for top reel (positioned at -symbolSize)
+    
+    // Recalculate available height with top space reserved
+    const availableHeight = rendererHeight - topUIHeight - bottomUIHeight;
     
     // Center the container
     const scaledWidth = actualGridWidth * scale;
@@ -609,8 +620,8 @@ export default class SceneManager {
     // Center X with side padding
     this.sceneLayer.x = (rendererWidth - scaledWidth) / 2;
     
-    // Position Y: top UI + center remaining space
-    // This ensures grid never overlaps with bottom UI
+    // Position Y: start from top space reserved for top reel
+    // Top reel at -symbolSize will be visible and sit directly above grid with no margin
     const remainingHeight = rendererHeight - topUIHeight - bottomUIHeight;
     this.sceneLayer.y = topUIHeight + (remainingHeight - scaledHeight) / 2;
   }
