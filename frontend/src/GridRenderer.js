@@ -1113,12 +1113,16 @@ export default class GridRenderer {
         console.warn(`[GridRenderer] renderGridFromMatrix: Reel ${col} - ReelHeights not available, using array.length: ${reelSymbolCount}`);
       }
 
-      // Use fixed cell size so reels visually grow/shrink instead of stretching textures
-      const maskStart = this.symbolSize;
-      const totalMaskHeight = this.maxRows * this.symbolSize;
-      const missingRows = Math.max(0, this.maxRows - reelSymbolCount);
-      const topOffset = maskStart + missingRows * this.symbolSize;
-      const bottomLimit = maskStart + totalMaskHeight;
+      // ===== MEGAWAYS DYNAMIC SCALING =====
+      // All columns have the SAME visual height, but symbols STRETCH to fill it
+      // If reel has 2 symbols → each symbol is BIG (half the column)
+      // If reel has 7 symbols → each symbol is SMALL (1/7th of the column)
+      const maskStart = this.symbolSize; // Mask starts after 1 buffer row
+      const totalColumnHeight = this.maxRows * this.symbolSize; // Full column height
+      const dynamicSymbolHeight = reelSymbolCount > 0 ? totalColumnHeight / reelSymbolCount : this.symbolSize;
+      
+      console.log(`[GridRenderer] renderGridFromMatrix: Reel ${col} MEGAWAYS - columnHeight=${totalColumnHeight}, symbolCount=${reelSymbolCount}, dynamicHeight=${dynamicSymbolHeight.toFixed(1)}`);
+      const bottomLimit = maskStart + totalColumnHeight;
 
       if (!reel.gridSprites) {
         reel.gridSprites = new Array(reelSymbolCount).fill(null);
@@ -1162,20 +1166,25 @@ export default class GridRenderer {
 
         sprite.texture = texture;
 
-        // Maintain a consistent cell size so we literally draw as many symbols as backend reports
+        // ===== MEGAWAYS DYNAMIC SCALING =====
+        // Scale symbols to fill their allocated space in the column
+        // Width: fill the reel width
+        // Height: stretch to fit (dynamicSymbolHeight based on reel height)
         const scaleX = this.reelWidth / texture.width;
-        const scaleY = this.symbolSize / texture.height;
+        const scaleY = dynamicSymbolHeight / texture.height;
         sprite.scale.set(scaleX, scaleY);
         sprite.x = Math.round((this.reelWidth - sprite.width) / 2);
 
-        // Backend Row 0 = bottom, Pixi y=0 = top → invert row index and offset by unused rows
+        // Backend Row 0 = bottom, Pixi y=0 = top
+        // Position symbols from bottom to top, filling the entire column
+        // Row 0 is at the BOTTOM, Row (count-1) is at the TOP
         const visualRowIndex = (reelSymbolCount - 1) - row;
-        sprite.y = topOffset + (visualRowIndex * this.symbolSize);
+        sprite.y = maskStart + (visualRowIndex * dynamicSymbolHeight);
         
         // Verify sprite is within viewable bounds
         const spriteBottom = sprite.y + sprite.height;
         if (sprite.y < maskStart - 1 || spriteBottom > bottomLimit + 1) {
-          console.warn(`[GridRenderer] renderGridFromMatrix: Reel ${col}, Row ${row} sprite OUTSIDE viewable bounds! y=${sprite.y.toFixed(1)}, bottom=${spriteBottom.toFixed(1)}, maskStart=${maskStart.toFixed(1)}, bottomLimit=${bottomLimit.toFixed(1)}`);
+          console.warn(`[GridRenderer] renderGridFromMatrix: Reel ${col}, Row ${row} sprite OUTSIDE viewable bounds! y=${sprite.y.toFixed(1)}, bottom=${spriteBottom.toFixed(1)}, maskStart=${maskStart.toFixed(1)}, bottomLimit=${bottomLimit.toFixed(1)}, dynamicHeight=${dynamicSymbolHeight.toFixed(1)}`);
         }
         
         sprite.visible = true;
@@ -1792,14 +1801,13 @@ export default class GridRenderer {
             reelHeight = Math.max(prevReel.length, nextReel.length);
           }
           
+          // ===== MEGAWAYS DYNAMIC SCALING FOR CASCADES =====
           const maskStart = this.symbolSize;
-          const totalMaskHeight = this.maxRows * this.symbolSize;
-          const missingRows = Math.max(0, this.maxRows - reelHeight);
-          const topOffset = maskStart + missingRows * this.symbolSize;
-          const cellHeight = this.symbolSize;
-          const getFixedY = (row) => {
+          const totalColumnHeight = this.maxRows * this.symbolSize;
+          const dynamicSymbolHeight = reelHeight > 0 ? totalColumnHeight / reelHeight : this.symbolSize;
+          const getDynamicY = (row) => {
             const visualRowIndex = (reelHeight - 1) - row;
-            return topOffset + (visualRowIndex * cellHeight);
+            return maskStart + (visualRowIndex * dynamicSymbolHeight);
           };
           
           if (!reel.gridSprites) {
@@ -1857,7 +1865,7 @@ export default class GridRenderer {
               return;
             }
 
-            const targetY = getFixedY(targetRow);
+            const targetY = getDynamicY(targetRow);
             occupiedRows.add(targetRow);
             reel.gridSprites[targetRow] = sprite;
             if (cell.row !== targetRow) {
@@ -1929,14 +1937,14 @@ export default class GridRenderer {
               return;
             }
 
-            // Match renderGridFromMatrix: fixed cell size per symbol
+            // ===== MEGAWAYS DYNAMIC SCALING FOR NEW SYMBOLS =====
             const scaleX = this.reelWidth / texture.width;
-            const scaleY = cellHeight / texture.height;
+            const scaleY = dynamicSymbolHeight / texture.height;
             sprite.texture = texture;
             sprite.scale.set(scaleX, scaleY);
             sprite.x = Math.round((this.reelWidth - sprite.width) / 2);
-            const targetY = getFixedY(row);
-            sprite.y = targetY - cellHeight * 1.1;
+            const targetY = getDynamicY(row);
+            sprite.y = targetY - dynamicSymbolHeight * 1.1;
             sprite.alpha = 1;
             sprite.visible = true;
 
@@ -2094,9 +2102,21 @@ export default class GridRenderer {
       typeof col !== 'number' ||
       row < 0 ||
       col < 0 ||
-      row >= this.rows ||
       col >= this.columns
     ) {
+      return null;
+    }
+    
+    // For Megaways, check against actual reel height for this column
+    const topReelCovers = [1, 2, 3, 4];
+    let maxRowForCol = this.maxRows;
+    if (this.reelHeights && this.reelHeights[col]) {
+      maxRowForCol = this.reelHeights[col];
+      if (topReelCovers.includes(col)) {
+        maxRowForCol = maxRowForCol - 1; // Exclude top reel
+      }
+    }
+    if (row >= maxRowForCol) {
       return null;
     }
 
