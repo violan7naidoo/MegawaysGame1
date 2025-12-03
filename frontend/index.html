@@ -248,11 +248,11 @@
       }
       #bottom-panel {
         position: absolute;
-        bottom: 50px;
+        bottom: 30px;
         left: 50%;
-        transform: translateX(-50%);
+        transform: translateX(-50%) scale(0.85);
         display: grid;
-        grid-template-columns: 1fr auto 1fr;
+        grid-template-columns: 1fr 1fr auto 1fr;
         align-items: center;
         gap: 12px;
         z-index: 10;
@@ -336,15 +336,31 @@
         opacity: 0.5;
         cursor: not-allowed;
       }
+      #left-controls {
+        position: absolute;
+        left: calc(50% - 380px);
+        top: 50%;
+        transform: translateY(-50%) scale(0.85);
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        z-index: 10;
+        pointer-events: none;
+      }
+      #left-controls > * {
+        pointer-events: auto;
+      }
       #bottom-controls {
         position: absolute;
-        bottom: 5px;
+        bottom: -15px;
         width: 100%;
         display: flex;
         justify-content: center;
         gap: 10px;
         z-index: 10;
         pointer-events: none;
+        transform: scale(0.85);
+        display: none; /* Hidden - controls moved to left side */
       }
       #bottom-controls > * {
         pointer-events: auto;
@@ -390,19 +406,8 @@
     <div id="top-hud" style="display: none;">
       <!-- Hidden - elements moved to game-info-bar -->
     </div>
-    <div id="game-info-bar">
-      <div class="hud-card">
-        <span class="hud-label">ROUND</span>
-        <span class="hud-value" id="round-label">--</span>
-      </div>
-      <div class="hud-card">
-        <span class="hud-label">CURRENT WIN</span>
-        <span class="hud-value" id="round-win">0.00</span>
-      </div>
-      <div id="balance-box" class="hud-card">
-        <span class="hud-label">BALANCE</span>
-        <span class="hud-value" id="balance-amount">0.00</span>
-      </div>
+    <div id="game-info-bar" style="display: none;">
+      <!-- Removed: ROUND, CURRENT WIN, BALANCE moved to bottom-panel -->
     </div>
     <div id="top-right-hud">
       <div id="timestamp-box">--:--:--</div>
@@ -418,6 +423,10 @@
     </div>
     <div id="bottom-panel">
       <div class="info-card">
+        <span class="label">BALANCE</span>
+        <span class="value" id="balance-amount">0.00</span>
+      </div>
+      <div class="info-card">
         <span class="label">TOTAL BET</span>
         <div class="bet-amount-container">
           <button class="bet-adjust-button" id="bet-down" title="Decrease Bet">−</button>
@@ -431,7 +440,7 @@
         <span class="value" id="win-amount">0.00</span>
       </div>
     </div>
-    <div id="bottom-controls">
+    <div id="left-controls">
       <button id="btn-buy" class="secondary-button">Buy Free Spins</button>
       <div class="bet-modes">
         <label><input type="radio" name="bet-mode" value="standard" checked>Standard</label>

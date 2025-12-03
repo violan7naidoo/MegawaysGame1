@@ -79,8 +79,9 @@ async function main() {
   const buyButton = document.getElementById('btn-buy');
   const betModeInputs = document.querySelectorAll('input[name="bet-mode"]');
   const turboButton = document.getElementById('btn-turbo');
-  const roundLabel = document.getElementById('round-label');
-  const roundWinLabel = document.getElementById('round-win');
+  // ROUND and CURRENT WIN elements removed - no longer needed
+  // const roundLabel = document.getElementById('round-label');
+  // const roundWinLabel = document.getElementById('round-win');
   const betAmountLabel = document.getElementById('bet-amount');
   const totalWinLabel = document.getElementById('win-amount');
   const balanceLabel = document.getElementById('balance-amount');
@@ -435,8 +436,8 @@ async function main() {
       }
     }
   }
-  roundLabel.textContent = 'Round --';
-  roundWinLabel.textContent = '0.00';
+  // ROUND and CURRENT WIN elements removed - no longer needed
+  // roundLabel and roundWinLabel are null, so skip updates
   
   // Balance will be initialized from sessionInfo after successful initialization
 
@@ -505,8 +506,8 @@ async function main() {
       // Step 5: Update UI with results
       const winAmount = getMoneyAmount(playResponse.win);
       const balance = getMoneyAmount(playResponse.balance ?? playResponse.balanceAfter);
-      roundLabel.textContent = playResponse.roundId ?? 'Round --';
-      roundWinLabel.textContent = winAmount.toFixed(2);
+      // ROUND and CURRENT WIN elements removed - no longer update them
+      // roundLabel and roundWinLabel are null
       totalWinLabel.textContent = winAmount.toFixed(2);
       if (balance > 0) {
         balanceLabel.textContent = balance.toFixed(2);
@@ -515,7 +516,7 @@ async function main() {
       // Error handling - stop animation and show error
       console.error('Spin failed', err);
       sceneManager.stopSpinAnimation();
-      roundWinLabel.textContent = 'Error';
+      // ROUND and CURRENT WIN elements removed - no longer update them
     } finally {
       // Always re-enable controls, even on error
       setControlsDisabled(false);
@@ -561,8 +562,7 @@ async function main() {
       const winAmount = getMoneyAmount(response.win);
       const costAmount = getMoneyAmount(response.buyCost);
       const balance = getMoneyAmount(response.balance ?? response.balanceAfter);
-      roundLabel.textContent = response.roundId ?? 'Feature Buy';
-      roundWinLabel.textContent = winAmount.toFixed(2);
+      // ROUND and CURRENT WIN elements removed - no longer update them
       totalWinLabel.textContent = winAmount.toFixed(2);
       if (balance > 0) {
         balanceLabel.textContent = balance.toFixed(2);
@@ -570,7 +570,7 @@ async function main() {
     } catch (err) {
       console.error('Buy failed', err);
       sceneManager.stopSpinAnimation();
-      roundWinLabel.textContent = 'Buy Failed';
+      // ROUND and CURRENT WIN elements removed - no longer update them
     } finally {
       setControlsDisabled(false);
     }
@@ -627,9 +627,6 @@ main().catch((err) => {
     </div>`;
   }
   
-  // Update round label to show error
-  if (roundLabel) {
-    roundLabel.textContent = 'Error';
-  }
+  // ROUND element removed - no longer update it
 });
 

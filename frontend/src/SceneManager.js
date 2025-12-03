@@ -632,8 +632,9 @@ export default class SceneManager {
     
     // Position Y: start from top space reserved for top reel
     // Top reel sits directly above grid with no gap (top reel at y=0, main grid visible area starts at y=symbolSize)
+    // Move grid up by 50px
     const remainingHeight = rendererHeight - topUIHeight - bottomUIHeight;
-    this.sceneLayer.y = topUIHeight + (remainingHeight - scaledHeight) / 2;
+    this.sceneLayer.y = topUIHeight + (remainingHeight - scaledHeight) / 2 - 50;
     
     // Update megaways display position
     if (this.gridRenderer) {
