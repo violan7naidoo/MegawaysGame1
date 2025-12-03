@@ -645,10 +645,63 @@ export default class SceneManager {
   // Removed renderPlaceholderBoard - reels are initialized with random symbols
 
   /**
+   * Preloads spin result data before starting visual spin
+   * 
+   * This sets reel heights and ensures reels are built with correct sizes
+   * BEFORE the spin starts, preventing gaps and rerendering.
+   * 
+   * @param {Object} results - Game results from backend
+   */
+  preloadSpinResult(results) {
+    if (!results || !this.gridRenderer) {
+      return;
+    }
+
+    // Extract Megaways data (for variable reel heights)
+    const reelHeights = results.reelHeights; // Array of heights per column
+    const topReelSymbols = results.topReelSymbols; // Symbols for horizontal top reel
+    const finalReelSymbols = results.reelSymbols; // Final grid state as jagged array
+
+    // CRITICAL: Set reel heights FIRST before building/starting spin
+    // This ensures symbols are built with correct sizes from the start
+    if (reelHeights && reelHeights.length > 0) {
+      console.log('[SceneManager] preloadSpinResult: Setting reel heights BEFORE spin', reelHeights);
+      this.gridRenderer.setReelHeights(reelHeights);
+    }
+
+    // Update top reel symbols
+    if (topReelSymbols && topReelSymbols.length > 0) {
+      if (this.topReelRenderer) {
+        this.topReelRenderer.setSymbols(topReelSymbols);
+      }
+      this.gridRenderer.setTopReel(topReelSymbols);
+    }
+
+    // CRITICAL: Build reels with correct sizes if they don't exist yet
+    // This ensures reels are created with the right symbol sizes from the start
+    if (this.gridRenderer.reels.length === 0) {
+      console.log('[SceneManager] preloadSpinResult: Building reels with correct sizes');
+      this.gridRenderer.buildReels(this.assets);
+    }
+
+    // CRITICAL: Preload textures BEFORE spin starts
+    // This applies final textures so reels spin with correct symbols and sizes
+    if (Array.isArray(finalReelSymbols) && finalReelSymbols.length > 0) {
+      console.log('[SceneManager] preloadSpinResult: Preloading textures BEFORE spin');
+      this.gridRenderer.preloadSpinResult(finalReelSymbols, this.assets);
+      if (this.topReelRenderer && topReelSymbols && topReelSymbols.length > 0) {
+        this.topReelRenderer.preloadSpinResult(topReelSymbols, this.assets);
+      }
+    }
+  }
+
+  /**
    * Starts the spin animation
    * 
    * Called when user clicks spin button. Starts visual reel spinning
    * and plays spin sound effect.
+   * 
+   * NOTE: preloadSpinResult() should be called FIRST to set correct sizes
    */
   startSpinAnimation() {
     if (!this.gridRenderer || this.availableSymbols.length === 0) {

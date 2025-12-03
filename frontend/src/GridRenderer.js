@@ -146,9 +146,54 @@ export default class GridRenderer {
       this.maxRows = Math.max(...reelHeights); // Update max rows
       this.size.height = this.symbolSize * this.maxRows; // Update grid height
       
-      // Don't rebuild during spin - wait for next spin to rebuild
-      // Rebuilding during spin would break the animation
-      // Reels will be rebuilt on next startSpin() call
+      console.log('[GridRenderer] setReelHeights: Updated reel heights', reelHeights);
+      
+      // CRITICAL: Immediately update symbol scaling for all reels if they're already built
+      // This ensures the grid shows the correct layout immediately, not after spin stops
+      if (this.reels && this.reels.length > 0) {
+        this._updateReelScalingForHeights();
+      }
+    }
+  }
+  
+  /**
+   * Updates symbol scaling for all reels based on current reelHeights
+   * Called immediately when reelHeights are set to update the visual layout
+   */
+  _updateReelScalingForHeights() {
+    if (!this.reelHeights || this.reelHeights.length === 0) {
+      return;
+    }
+    
+    const topReelCovers = [1, 2, 3, 4];
+    const maskStart = this.symbolSize;
+    const totalColumnHeight = this.rows * this.symbolSize;
+    
+    for (let col = 0; col < this.columns && col < this.reels.length; col++) {
+      const reel = this.reels[col];
+      if (!reel || !reel.symbols || reel.symbols.length === 0) continue;
+      
+      // Calculate symbol count for this reel (excluding top reel if covered)
+      let reelSymbolCount = this.reelHeights[col] || this.rows;
+      if (topReelCovers.includes(col)) {
+        reelSymbolCount = reelSymbolCount - 1; // Exclude top reel
+      }
+      
+      // Calculate dynamic height for this reel
+      const dynamicHeight = reelSymbolCount > 0 ? totalColumnHeight / reelSymbolCount : this.symbolSize;
+      
+      // Update all symbols in this reel to use dynamic height
+      for (let j = 0; j < reel.symbols.length; j++) {
+        const symbol = reel.symbols[j];
+        if (!symbol || symbol.destroyed) continue;
+        
+        // Update scale to match dynamic height
+        const scaleY = dynamicHeight / symbol.texture.height;
+        const scaleX = this.symbolSize / symbol.texture.width;
+        symbol.scale.set(scaleX, scaleY);
+      }
+      
+      console.log(`[GridRenderer] _updateReelScalingForHeights: Reel ${col} - symbolCount=${reelSymbolCount}, dynamicHeight=${dynamicHeight.toFixed(1)}`);
     }
   }
 
@@ -487,18 +532,26 @@ export default class GridRenderer {
 
       // Build symbols for this reel - Fill the FIXED height + buffer
       // This ensures the strip is always long enough to fill the view
-      const symbolCount = fixedReelHeight + 1;
+      // Use maxRows to ensure we have enough symbols for the tallest possible reel
+      const symbolCount = this.maxRows + 2; // Extra buffer for smooth spinning
+      
+      // Get dynamic height for this reel (if reelHeights are set, otherwise use default)
+      const dynamicHeight = this._getDynamicSymbolHeight(i);
+      const maskStart = this.symbolSize; // Symbols start after buffer row
+      
       for (let j = 0; j < symbolCount; j++) {
         const texture = slotTextures[Math.floor(Math.random() * slotTextures.length)];
         const symbol = new PIXI.Sprite(texture);
         
-        symbol.scale.x = symbol.scale.y = Math.min(
-          this.symbolSize / symbol.texture.width,
-          this.symbolSize / symbol.texture.height
-        );
+        // CRITICAL: Scale symbols to match dynamic height from the start
+        // This ensures no gaps appear during spin
+        const scaleY = dynamicHeight / symbol.texture.height;
+        const scaleX = this.symbolSize / symbol.texture.width;
+        symbol.scale.set(scaleX, scaleY);
         
-        // Position symbols using standard spacing for spin
-        symbol.y = j * this.symbolSize;
+        // Position symbols starting from maskStart with dynamic spacing
+        // This ensures symbols fill the reel with no gaps
+        symbol.y = maskStart + (j * dynamicHeight);
         symbol.x = Math.round((this.reelWidth - symbol.width) / 2);
         
         reel.symbols.push(symbol);
@@ -601,22 +654,40 @@ export default class GridRenderer {
           if (!symbol || symbol.destroyed) continue;
 
           const prevy = symbol.y;
-          // Standard spin logic - uses fixed symbolSize spacing
-          const newY = ((reel.position + j) % reel.symbols.length) * this.symbolSize;
+          
+          // CRITICAL: Use dynamic height if reelHeights are set, otherwise use fixed symbolSize
+          // This ensures symbols are positioned correctly during spin based on actual reel heights
+          const dynamicHeight = this._getDynamicSymbolHeight(i);
+          
+          // CRITICAL: Position symbols starting from maskStart (this.symbolSize) to fill visible area
+          // Symbols should be positioned with no gaps, filling the entire visible reel height
+          const maskStart = this.symbolSize; // Mask starts after buffer row
+          const symbolIndex = (reel.position + j) % reel.symbols.length;
+          const newY = maskStart + (symbolIndex * dynamicHeight);
           symbol.y = newY;
           
-          // Bounds check
-          const maxY = (this.maxRows + 1) * this.symbolSize + this.symbolSize;
-          if (symbol.y < -this.symbolSize * 2 || symbol.y > maxY) {
-            symbol.y = ((symbol.y % maxY) + maxY) % maxY;
+          // CRITICAL: Update symbol scale to match dynamic height so there are no gaps
+          // This ensures symbols always fill the reel properly, even during spin
+          if (!reel.finalTexturesApplied || !this.resultMatrix) {
+            const scaleY = dynamicHeight / symbol.texture.height;
+            const scaleX = this.symbolSize / symbol.texture.width;
+            symbol.scale.set(scaleX, scaleY);
+          }
+          
+          // Bounds check - wrap symbols that go out of bounds
+          const maxY = maskStart + (this.maxRows + 1) * dynamicHeight;
+          if (symbol.y < -dynamicHeight || symbol.y > maxY) {
+            // Wrap symbol position to keep strip continuous
+            const wrappedY = ((symbol.y - maskStart) % (reel.symbols.length * dynamicHeight) + (reel.symbols.length * dynamicHeight)) % (reel.symbols.length * dynamicHeight) + maskStart;
+            symbol.y = wrappedY;
           }
 
           // Update textures randomly during spin, but ONLY if final textures haven't been applied
           // Once resultMatrix is set, we should use final textures, not random ones
-          // Check if symbol crossed the visible area boundary (accounting for symbolSize offset)
-          // CRITICAL: Use this.rows (visible area) not this.maxRows
-          const visibleStart = this.symbolSize;
-          const visibleEnd = this.symbolSize + this.rows * this.symbolSize;
+          // Check if symbol crossed the visible area boundary (accounting for maskStart offset)
+          // CRITICAL: Use dynamic height to calculate visible area correctly
+          const visibleStart = maskStart;
+          const visibleEnd = maskStart + this.rows * dynamicHeight;
           if (
             allowSpinLayout &&
             this.running &&
@@ -632,10 +703,13 @@ export default class GridRenderer {
 
             if (slotTextures.length > 0) {
               symbol.texture = slotTextures[Math.floor(Math.random() * slotTextures.length)];
-              symbol.scale.x = symbol.scale.y = Math.min(
-                this.symbolSize / symbol.texture.width,
-                this.symbolSize / symbol.texture.height
-              );
+              
+              // CRITICAL: Use dynamic height for scaling to ensure no gaps
+              const dynamicHeight = this._getDynamicSymbolHeight(i);
+              const scaleY = dynamicHeight / symbol.texture.height;
+              const scaleX = this.symbolSize / symbol.texture.width;
+              symbol.scale.set(scaleX, scaleY);
+              
               symbol.x = Math.round((this.reelWidth - symbol.width) / 2);
             }
           } else if (this.resultMatrix && allowSpinLayout && this.running) {
@@ -734,7 +808,15 @@ export default class GridRenderer {
     this.running = true;
     this.currentAssets = assets;
     this.onSpinComplete = null;
-    this.resultMatrix = null;
+    
+    // CRITICAL: Don't reset resultMatrix if it's already been set by preloadSpinResult
+    // This ensures the spin starts with correct textures already applied
+    // Only reset if it hasn't been preloaded (for backward compatibility)
+    if (this.resultMatrix) {
+      console.log('[GridRenderer] startSpin: resultMatrix already set by preloadSpinResult, keeping it');
+    } else {
+      this.resultMatrix = null;
+    }
     
     // Reset megaways display to blank at start of spin
     const waysDisplay = document.getElementById('ways-to-win');
@@ -1587,8 +1669,36 @@ export default class GridRenderer {
     // Store jagged array structure so the ticker stops applying random textures
     this.resultMatrix = reelSymbols.map(reel => [...reel]);
 
+    console.log('[GridRenderer] preloadSpinResult: Applying textures and scaling to ALL reels immediately');
+    
+    // CRITICAL: First, update symbol scaling based on reelHeights if available
+    // This ensures symbols are the correct size BEFORE applying textures
+    if (this.reelHeights && this.reelHeights.length > 0) {
+      this._updateReelScalingForHeights();
+    }
+    
+    // CRITICAL: Apply textures to ALL main reels immediately (not just top reel)
+    // This ensures reels stop on the correct symbols, not random ones
+    // We apply textures based on targetPosition so they're correct when reels stop
+    for (let col = 0; col < this.columns && col < this.reels.length; col++) {
+      const reel = this.reels[col];
+      if (reel && reel.symbols && reel.symbols.length > 0) {
+        // Ensure targetPosition is set (should already be set by startSpin, but check anyway)
+        if (!Number.isFinite(reel.targetPosition)) {
+          reel.targetPosition = reel.position;
+        }
+        
+        // Apply textures to sprites that will be visible when reel stops at targetPosition
+        // This is the KEY fix: textures are applied immediately, so reels stop on correct symbols
+        this._applyResultToReelSpinLayer(reel);
+        reel.finalTexturesApplied = true; // Mark as applied to prevent ticker from overwriting with random textures
+      }
+    }
+
     // Update top reel textures so the topper stops on the correct symbols
     this._applyResultToTopReelSpinLayer(reelSymbols, assets);
+    
+    console.log('[GridRenderer] preloadSpinResult: All textures and scaling applied immediately - reels will stop on correct symbols');
   }
   
   _applyResultToTopReelSpinLayer(reelSymbols, assets) {
@@ -2322,6 +2432,30 @@ export default class GridRenderer {
     }
     const startIndex = symbolCount - this.rows;
     return (startIndex + row) % symbolCount;
+  }
+
+  /**
+   * Gets the dynamic symbol height for a given column based on reelHeights
+   * 
+   * @param {number} colIndex - Column index (0-based)
+   * @returns {number} Dynamic height in pixels
+   */
+  _getDynamicSymbolHeight(colIndex) {
+    if (!this.reelHeights || !Array.isArray(this.reelHeights) || colIndex >= this.reelHeights.length) {
+      return this.symbolSize; // Default to fixed size if reelHeights not available
+    }
+    
+    const topReelCovers = [1, 2, 3, 4];
+    const totalColumnHeight = this.rows * this.symbolSize;
+    
+    // Calculate symbol count for this reel (excluding top reel if covered)
+    let reelSymbolCount = this.reelHeights[colIndex] || this.rows;
+    if (topReelCovers.includes(colIndex)) {
+      reelSymbolCount = reelSymbolCount - 1; // Exclude top reel
+    }
+    
+    // Calculate dynamic height: total height divided by symbol count
+    return reelSymbolCount > 0 ? totalColumnHeight / reelSymbolCount : this.symbolSize;
   }
 
   _getSpriteIndexForRowAtPosition(reel, row, position) {

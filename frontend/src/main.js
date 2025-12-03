@@ -468,12 +468,10 @@ async function main() {
     // Disable all controls during spin
     setControlsDisabled(true);
     
-    // Spin sound is played by AudioManager in startSpinAnimation
     try {
-      // Step 1: Start visual spin animation (reels start spinning)
-      sceneManager.startSpinAnimation();
-      
-      // Step 2: Prepare payload for backend API
+      // CRITICAL: Get backend response FIRST before starting visual spin
+      // This ensures we know the reel heights and symbols before spinning starts
+      // Step 1: Prepare payload for backend API
       const playPayload = {
         sessionId: sessionInfo.sessionId,
         baseBet: currentBaseBet,
@@ -482,7 +480,7 @@ async function main() {
         userPayload: { lang: 'en' }
       };
       
-      // Step 3: Send spin request to backend and wait for results
+      // Step 2: Send spin request to backend and wait for results
       console.log('[main] startSpin: Sending play request to backend...');
       const playResponse = await network.play(sessionInfo.gameId, playPayload);
       console.log('[main] startSpin: Backend response received', {
@@ -498,7 +496,16 @@ async function main() {
         console.log('[main] startSpin: Reel symbols from backend:', playResponse.results.reelSymbols.map(r => r?.length || 0));
       }
       
-      // Step 4: Render results (handles cascades, free spins, etc.)
+      // Step 3: Preload result data BEFORE starting visual spin
+      // This sets reel heights and applies textures so the spin starts with correct sizes
+      console.log('[main] startSpin: Preloading result data before spin...');
+      sceneManager.preloadSpinResult(playResponse.results);
+      
+      // Step 4: Start visual spin animation (reels start spinning with correct sizes already applied)
+      console.log('[main] startSpin: Starting visual spin animation...');
+      sceneManager.startSpinAnimation();
+      
+      // Step 5: Render results (handles cascades, free spins, etc.)
       console.log('[main] startSpin: Calling renderResults...');
       sceneManager.renderResults(playResponse.results, playResponse);
       console.log('[main] startSpin: renderResults completed');
