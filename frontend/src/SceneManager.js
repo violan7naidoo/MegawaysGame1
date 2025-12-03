@@ -322,13 +322,16 @@ export default class SceneManager {
     if (reelHeights && reelHeights.length > 0) {
       console.log('[SceneManager] continueRenderResults: Setting reel heights', reelHeights);
       this.gridRenderer.setReelHeights(reelHeights);
-      // Don't rebuild during spin - wait for spin to complete
-      // The reels will be rebuilt when needed (e.g., on next spin start)
     }
 
-    // Update top reel symbols (horizontal reel above columns 2-5)
-    if (topReelSymbols && topReelSymbols.length > 0 && this.topReelRenderer) {
-      this.topReelRenderer.setSymbols(topReelSymbols);
+    // Update top reel symbols on BOTH renderers
+    if (topReelSymbols && topReelSymbols.length > 0) {
+      // Set on TopReelRenderer (separate component)
+      if (this.topReelRenderer) {
+        this.topReelRenderer.setSymbols(topReelSymbols);
+      }
+      // CRITICAL: Also set on GridRenderer (used for grid layer rendering)
+      this.gridRenderer.setTopReel(topReelSymbols);
     }
 
     // Update ways-to-win display in UI (Megaways feature)

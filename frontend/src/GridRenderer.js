@@ -426,10 +426,10 @@ export default class GridRenderer {
       this.container.addChild(this.topReelContainer);
     }
 
-    // --- FIX: Use FIXED height for reels based on maxRows ---
-    // This ensures the mask and spinning strip are always the size of the game window,
-    // preventing symbols from spinning "outside" the grid.
-    const fixedReelHeight = this.maxRows;
+    // --- FIX: Use FIXED height for reels based on rows (visible area) ---
+    // This ensures the mask and spinning strip match the visible game window
+    // CRITICAL: Use this.rows (fixed visible area) for the mask
+    const fixedReelHeight = this.rows;
 
     // Build reels (one per column) with masking
     for (let i = 0; i < this.columns; i++) {
@@ -612,8 +612,9 @@ export default class GridRenderer {
           // Update textures randomly during spin, but ONLY if final textures haven't been applied
           // Once resultMatrix is set, we should use final textures, not random ones
           // Check if symbol crossed the visible area boundary (accounting for symbolSize offset)
+          // CRITICAL: Use this.rows (visible area) not this.maxRows
           const visibleStart = this.symbolSize;
-          const visibleEnd = this.symbolSize + this.maxRows * this.symbolSize;
+          const visibleEnd = this.symbolSize + this.rows * this.symbolSize;
           if (
             allowSpinLayout &&
             this.running &&
@@ -751,8 +752,8 @@ export default class GridRenderer {
         if (reel.container.mask !== reel.mask) {
           reel.container.mask = reel.mask;
         }
-        // Verify mask height is correct (should always be maxRows * symbolSize)
-        const expectedMaskHeight = this.maxRows * this.symbolSize;
+        // Verify mask height is correct (should always be rows * symbolSize)
+        const expectedMaskHeight = this.rows * this.symbolSize;
         const currentMaskHeight = reel.mask.height || 0;
         if (Math.abs(currentMaskHeight - expectedMaskHeight) > 1) {
           console.warn(`[GridRenderer] startSpin: Reel ${i} mask height mismatch. Expected: ${expectedMaskHeight}, Got: ${currentMaskHeight}`);
@@ -1077,7 +1078,12 @@ export default class GridRenderer {
       this.buildReels(assets);
     }
 
-    console.log(`[GridRenderer] renderGridFromMatrix: columns=${reelSymbols.length}, reelLengths=${reelSymbols.map(r => r?.length || 0).join(',')}`);
+    // ===== DEBUG: Log all critical state =====
+    console.log(`[GridRenderer] renderGridFromMatrix: ===== START RENDER =====`);
+    console.log(`[GridRenderer] renderGridFromMatrix: this.reelHeights =`, this.reelHeights);
+    console.log(`[GridRenderer] renderGridFromMatrix: this.maxRows = ${this.maxRows}`);
+    console.log(`[GridRenderer] renderGridFromMatrix: this.topReel =`, this.topReel);
+    console.log(`[GridRenderer] renderGridFromMatrix: reelSymbols lengths = [${reelSymbols.map(r => r?.length || 0).join(', ')}]`);
 
     // Render each reel column
     for (let col = 0; col < this.columns && col < reelSymbols.length; col++) {
@@ -1117,18 +1123,30 @@ export default class GridRenderer {
       // All columns have the SAME visual height, but symbols STRETCH to fill it
       // If reel has 2 symbols → each symbol is BIG (half the column)
       // If reel has 7 symbols → each symbol is SMALL (1/7th of the column)
+      // CRITICAL: Use this.rows (fixed visible area, e.g. 5) NOT this.maxRows (variable)
+      // The mask is built with this.rows, so symbols must fit within that space
       const maskStart = this.symbolSize; // Mask starts after 1 buffer row
-      const totalColumnHeight = this.maxRows * this.symbolSize; // Full column height
+      const totalColumnHeight = this.rows * this.symbolSize; // Visible column height (mask size)
       const dynamicSymbolHeight = reelSymbolCount > 0 ? totalColumnHeight / reelSymbolCount : this.symbolSize;
       
-      console.log(`[GridRenderer] renderGridFromMatrix: Reel ${col} MEGAWAYS - columnHeight=${totalColumnHeight}, symbolCount=${reelSymbolCount}, dynamicHeight=${dynamicSymbolHeight.toFixed(1)}`);
+      console.log(`[GridRenderer] renderGridFromMatrix: Reel ${col} FINAL - reelSymbolCount=${reelSymbolCount}, dynamicHeight=${dynamicSymbolHeight.toFixed(1)}, totalColumnHeight=${totalColumnHeight}`);
       const bottomLimit = maskStart + totalColumnHeight;
 
-      if (!reel.gridSprites) {
-        reel.gridSprites = new Array(reelSymbolCount).fill(null);
-      } else if (reel.gridSprites.length < reelSymbolCount) {
-        reel.gridSprites = [...reel.gridSprites, ...new Array(reelSymbolCount - reel.gridSprites.length).fill(null)];
+      // ===== CRITICAL: Clean up ALL old sprites first =====
+      // Destroy and remove ALL existing sprites in gridLayer to ensure clean state
+      if (reel.gridLayer) {
+        while (reel.gridLayer.children.length > 0) {
+          const child = reel.gridLayer.children[0];
+          reel.gridLayer.removeChild(child);
+          if (child && !child.destroyed) {
+            child.destroy();
+          }
+        }
       }
+      
+      // Reset gridSprites array to exact size needed
+      reel.gridSprites = new Array(reelSymbolCount).fill(null);
+      console.log(`[GridRenderer] renderGridFromMatrix: Reel ${col} - gridSprites array reset to length ${reelSymbolCount}`);
 
       // Render each symbol in this reel
       // Debug: Log all symbols for this reel
@@ -1270,6 +1288,19 @@ export default class GridRenderer {
         }
       }
     }
+
+    // ===== DEBUG: Summary of what was rendered =====
+    console.log(`[GridRenderer] renderGridFromMatrix: ===== RENDER SUMMARY =====`);
+    console.log(`[GridRenderer] renderGridFromMatrix: Using this.rows=${this.rows} for visible height`);
+    for (let col = 0; col < this.columns; col++) {
+      const reel = this.reels[col];
+      const visibleCount = reel?.gridSprites?.filter(s => s && s.visible)?.length || 0;
+      const totalCount = reel?.gridSprites?.length || 0;
+      const gridLayerChildren = reel?.gridLayer?.children?.length || 0;
+      const expectedHeight = this.reelHeights?.[col] || this.rows;
+      console.log(`[GridRenderer] renderGridFromMatrix: Reel ${col} - ${visibleCount}/${totalCount} sprites visible (gridLayer has ${gridLayerChildren} children), expected from reelHeights: ${expectedHeight}`);
+    }
+    console.log(`[GridRenderer] renderGridFromMatrix: ===== END RENDER =====`);
 
     // Store reel symbols for reference (flattened for compatibility with existing code)
     const flattened = [];
@@ -1802,8 +1833,9 @@ export default class GridRenderer {
           }
           
           // ===== MEGAWAYS DYNAMIC SCALING FOR CASCADES =====
+          // CRITICAL: Use this.rows (fixed visible area) NOT this.maxRows
           const maskStart = this.symbolSize;
-          const totalColumnHeight = this.maxRows * this.symbolSize;
+          const totalColumnHeight = this.rows * this.symbolSize; // Visible column height (mask size)
           const dynamicSymbolHeight = reelHeight > 0 ? totalColumnHeight / reelHeight : this.symbolSize;
           const getDynamicY = (row) => {
             const visualRowIndex = (reelHeight - 1) - row;
