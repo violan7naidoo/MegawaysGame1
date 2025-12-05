@@ -231,6 +231,11 @@ export default class GridRenderer {
    * @returns {void}
    */
   initialize(sceneLayer) {
+    // Position main grid container right below the top reel
+    // Top reel is at y=-symbolSize and has height=symbolSize, so it occupies y=-symbolSize to y=0
+    // Main grid should start at y=0 (right below the top reel)
+    // Reel containers are at y=0 relative to this container, so first symbols appear at y=0 in sceneLayer
+    this.container.y = 0;
     sceneLayer.addChild(this.container);
     this.drawBackground();
     this.setupTicker();
@@ -482,7 +487,10 @@ export default class GridRenderer {
       const reelContainer = new PIXI.Container();
       // Round positions to prevent sub-pixel jitter
       reelContainer.x = Math.round(i * this.reelWidth);
-      reelContainer.y = 0; // Fixed Y position - never changes
+      // Reel containers are positioned at y=0 relative to main grid container
+      // Main grid container is positioned at y=symbolSize in sceneLayer (below top reel)
+      // So reel containers are at y=symbolSize in sceneLayer, which is below the top reel (ends at y=0)
+      reelContainer.y = 0; // Fixed Y position relative to main grid container
 
       const hasTopReel = this.topReel && [1, 2, 3, 4].includes(i);
 
@@ -490,7 +498,7 @@ export default class GridRenderer {
       // Always size the mask to maxRows, regardless of current spin result.
       const mask = new PIXI.Graphics();
       mask.beginFill(0xffffff);
-      const maskY = this.symbolSize; // Always start at symbolSize to hide the top buffer row
+      const maskY = 0; // Start at 0 to show full reel strip
       const maskHeight = this.symbolSize * fixedReelHeight; // Fixed height
       mask.drawRect(0, maskY, this.reelWidth, maskHeight);
       mask.endFill();
@@ -745,6 +753,20 @@ export default class GridRenderer {
     this.currentAssets = assets;
     this.onSpinComplete = null;
     
+    // CRITICAL: Switch to spin layer immediately so symbols are visible
+    // Hide grid layer and show spin layer for all reels
+    for (let i = 0; i < this.reels.length; i++) {
+      const reel = this.reels[i];
+      if (reel) {
+        if (reel.spinLayer) {
+          reel.spinLayer.visible = true;
+        }
+        if (reel.gridLayer) {
+          reel.gridLayer.visible = false;
+        }
+      }
+    }
+    
     // CRITICAL: Don't reset resultMatrix if it's already been set by preloadSpinResult
     // This ensures the spin starts with correct textures already applied
     // Only reset if it hasn't been preloaded (for backward compatibility)
@@ -787,13 +809,17 @@ export default class GridRenderer {
       }
     }
 
-    // Ensure container is visible
+    // Ensure container is visible and positioned correctly
     if (this.container) {
       this.container.visible = true;
       this.container.alpha = 1;
+      // Ensure main grid container is positioned right below the top reel
+      // This should already be set in initialize, but ensure it's correct here too
+      if (this.container.y !== 0) {
+        this.container.y = 0;
+        console.log(`[GridRenderer] startSpin: Corrected main grid container Y to 0`);
+      }
     }
-    
-    this.enterSpinMode(); // Show spin layer, hide grid layer
 
     // Reset final texture flags for all reels
     // These flags track if final textures have been applied during spin
@@ -804,35 +830,96 @@ export default class GridRenderer {
       }
     }
 
+    // CRITICAL: Build strips FIRST before switching layers
+    // This ensures spin layer has symbols BEFORE we hide the grid layer
+    for (let i = 0; i < this.reels.length; i++) {
+      const reel = this.reels[i];
+      if (!reel || !reel.container || !reel.spinLayer) continue;
+
+      // ALWAYS rebuild the strip to ensure we have current symbols from grid layer
+      const currentHeight = this.reelHeights ? (this.reelHeights[i] || this.rows) : this.rows;
+      const randomTarget = [];
+      
+      // Generate random target symbols as placeholders
+      // The actual target symbols will be swapped in by preloadSpinResult when backend response arrives
+      const slotTextures = this.availableSymbols
+        .map(alias => assets.get(alias))
+        .filter(texture => texture != null);
+        
+      for(let k = 0; k < currentHeight; k++) {
+        if (slotTextures.length > 0) {
+          const randomTexture = slotTextures[Math.floor(Math.random() * slotTextures.length)];
+          const symbolCode = this._getSymbolCodeFromTexture(randomTexture);
+          randomTarget.push(symbolCode || this.availableSymbols[Math.floor(Math.random() * this.availableSymbols.length)]);
+        } else {
+          randomTarget.push(this.availableSymbols[Math.floor(Math.random() * this.availableSymbols.length)]);
+        }
+      }
+      
+      // ALWAYS rebuild strip to ensure we grab current symbols from grid layer
+      // This ensures symbols are visible immediately when spin starts
+      this._buildReelStrip(reel, i, randomTarget, assets);
+      
+      // Container Y is now set inside _buildReelStrip, but verify it's correct
+      if (reel.container && (!reel.stripHeight || !Number.isFinite(reel.stripCurrentOffset))) {
+        // Fallback: if strip wasn't built, set container Y to show existing symbols
+        const dynamicHeight = this._getDynamicSymbolHeight(i);
+        const maskStart = this.symbolSize;
+        reel.container.y = maskStart;
+        console.warn(`[GridRenderer] startSpin: Reel ${i} - Strip not built properly, using fallback container Y`);
+      }
+      
+      // Ensure strip was built successfully
+      if (!reel.stripHeight || !Number.isFinite(reel.stripCurrentOffset)) {
+        console.error(`[GridRenderer] startSpin: Reel ${i} strip still not built after fallback`);
+        continue; // Skip this reel if we can't build strip
+      }
+      
+      // CRITICAL: Ensure all symbols in spin layer are visible BEFORE switching layers
+      if (reel.spinLayer) {
+        reel.spinLayer.visible = true;
+        // Ensure all symbols in spin layer are visible
+        if (reel.symbols && reel.symbols.length > 0) {
+          for (const symbol of reel.symbols) {
+            if (symbol) {
+              symbol.visible = true;
+              symbol.alpha = 1;
+            }
+
+          }
+          console.log(`[GridRenderer] startSpin: Reel ${i} - Spin layer has ${reel.symbols.length} symbols, container Y=${reel.container.y}`);
+        } else {
+          console.warn(`[GridRenderer] startSpin: Reel ${i} - Spin layer has NO symbols!`);
+        }
+      }
+    }
+    
+    // NOW switch layers - spin layer should have symbols by now
+    this.enterSpinMode(); // Show spin layer, hide grid layer
+
     // Start each reel spinning with staggered timing using container Y animation
     // This is the key to smooth spinning - animate the container, not individual sprites
     for (let i = 0; i < this.reels.length; i++) {
       const reel = this.reels[i];
       if (!reel || !reel.container || !reel.spinLayer) continue;
-
-      // Check if strip was built (should be done in preloadSpinResult)
+      
+      // Skip if strip wasn't built
       if (!reel.stripHeight || !Number.isFinite(reel.stripCurrentOffset)) {
-        console.warn(`[GridRenderer] startSpin: Reel ${i} strip not built, building now`);
-        // Fallback: build a basic strip if preloadSpinResult wasn't called
-        if (this.resultMatrix && this.resultMatrix[i]) {
-          this._buildReelStrip(reel, i, this.resultMatrix[i], assets);
-        } else {
-          continue; // Skip this reel if we can't build strip
-        }
+        continue;
       }
 
       const dynamicHeight = this._getDynamicSymbolHeight(i);
-      const maskStart = this.symbolSize;
       
       // Calculate start and end positions for container Y animation
       // Strip structure: target symbols at top (y=0), random in middle, current at bottom
-      // Start: container Y positioned so current symbols (at stripCurrentOffset) are visible at maskStart
-      // End: container Y positioned so target symbols (at stripTargetOffset=0) are visible at maskStart
-      // Formula: container.y + symbol.y = maskStart (for visible symbols)
-      const startY = maskStart - (reel.stripCurrentOffset * dynamicHeight);
-      const endY = maskStart; // Target symbols are at y=0 in strip, so container.y = maskStart makes them visible
+      // Since mask now starts at 0, container Y should position symbols to be visible from y=0
+      // Start: container Y positioned so current symbols (at stripCurrentOffset) are visible
+      // End: container Y positioned so target symbols (at y=0 in strip) are visible at y=0 in world space
+      // Formula: container.y + symbol.y = 0 (for visible symbols at top)
+      const startY = -(reel.stripCurrentOffset * dynamicHeight);
+      const endY = 0; // Target symbols are at y=0 in strip, so container.y = 0 makes them visible at top
       
-      // Set initial container position
+      // Set initial container position (may have been set above, but ensure it's correct)
       reel.container.y = startY;
       
       // Turbo mode: reduce spin time by 60% (faster spins)
@@ -975,8 +1062,8 @@ export default class GridRenderer {
         }
         // Complete reel to final position if we have result matrix
         if (this.resultMatrix && this.resultMatrix[i] && reel.container) {
-          const maskStart = this.symbolSize;
-          reel.container.y = maskStart;
+          // Since mask now starts at 0, container Y should be 0 to show symbols from the top
+          reel.container.y = 0;
           this.finishReelSpin(reel, i, this.resultMatrix[i], this.currentAssets);
         }
       }
@@ -1024,7 +1111,8 @@ export default class GridRenderer {
     
     // Get dynamic height for this reel
     const dynamicHeight = this._getDynamicSymbolHeight(col);
-    const maskStart = this.symbolSize;
+    // maskStart is no longer used since mask starts at 0, but keep for reference
+    const maskStart = 0;
     
     // Rebuild with just the final symbols (target symbols)
     // Position symbols relative to container (container Y will be maskStart)
@@ -1044,8 +1132,9 @@ export default class GridRenderer {
       reel.spinLayer.addChild(symbol);
     }
     
-    // Ensure container is at the correct final position (so symbols appear at maskStart)
-    reel.container.y = maskStart;
+    // Ensure container is at the correct final position (so symbols appear at y=0 in world space)
+    // Since mask now starts at 0, container Y should be 0 to show symbols from the top
+    reel.container.y = 0;
     
     console.log(`[GridRenderer] finishReelSpin: Reel ${col} - Rebuilt with ${reelHeight} final symbols`);
   }
@@ -1067,41 +1156,42 @@ export default class GridRenderer {
         }
         
         // Ensure container is at final position
-        const maskStart = this.symbolSize;
+        // Since mask now starts at 0, container Y should be 0 to show symbols from the top
         if (reel.container) {
-          reel.container.y = maskStart;
+          reel.container.y = 0;
         }
-          // Force update symbol positions to exact final positions
-          if (reel.symbols) {
-            // Log what symbols are visible in this reel after stopping
-            const visibleSymbols = [];
-            const reelHeight = reel.height || (this.reelHeights && this.reelHeights[i]) || this.rows;
-            // CRITICAL: Use dynamic height (same as ticker) to ensure positions match
-            const dynamicHeight = this._getDynamicSymbolHeight(i);
-            const availableHeight = dynamicHeight * reelHeight;
-            const symbolSpacing = availableHeight / reelHeight;
-            const visibleStart = this.symbolSize; // Mask starts here
-            const visibleEnd = visibleStart + availableHeight;
-            
-            for (let j = 0; j < reel.symbols.length; j++) {
-              const symbol = reel.symbols[j];
-              if (symbol && !symbol.destroyed) {
-                // CRITICAL: Use dynamic height (same as ticker) to ensure positions match exactly
-                // Position starting from symbolSize (mask start) to align with visible area
-                const symbolIndex = (reel.position + j) % reel.symbols.length;
-                symbol.y = this.symbolSize + (symbolIndex * dynamicHeight);
-                // Check if this symbol is in the visible area
-                if (symbol.y >= visibleStart && symbol.y < visibleEnd) {
-                  const textureUrl = symbol.texture?.baseTexture?.resource?.url || 'unknown';
-                  const symbolAlias = this.availableSymbols.find(alias => {
-                    const tex = this.currentAssets?.get(alias);
-                    return tex?.baseTexture?.resource?.url === textureUrl;
-                  }) || 'UNKNOWN';
-                  // Calculate which logical row this symbol represents
-                  const relativeY = symbol.y - visibleStart;
-                  const row = Math.floor(relativeY / symbolSpacing);
-                  visibleSymbols.push({ row, symbol: symbolAlias });
-                }
+        
+        // CRITICAL: Symbols are already positioned correctly in finishReelSpin
+        // They are positioned relative to container (starting at y=0)
+        // Container Y is set to maskStart, so symbols will be at correct position
+        // DO NOT update symbol positions here - they're already correct!
+        
+        // Log what symbols are visible in this reel after stopping
+        if (reel.symbols) {
+          const visibleSymbols = [];
+          const reelHeight = reel.height || (this.reelHeights && this.reelHeights[i]) || this.rows;
+          const dynamicHeight = this._getDynamicSymbolHeight(i);
+          const availableHeight = dynamicHeight * reelHeight;
+          const visibleStart = this.symbolSize; // Mask starts here
+          const visibleEnd = visibleStart + availableHeight;
+          
+          for (let j = 0; j < reel.symbols.length; j++) {
+            const symbol = reel.symbols[j];
+            if (symbol && !symbol.destroyed) {
+              // Calculate world Y position (container Y + symbol Y)
+              const worldY = (reel.container?.y || maskStart) + symbol.y;
+              // Check if this symbol is in the visible area (use worldY, not symbol.y)
+              if (worldY >= visibleStart && worldY < visibleEnd) {
+                const textureUrl = symbol.texture?.baseTexture?.resource?.url || 'unknown';
+                const symbolAlias = this.availableSymbols.find(alias => {
+                  const tex = this.currentAssets?.get(alias);
+                  return tex?.baseTexture?.resource?.url === textureUrl;
+                }) || 'UNKNOWN';
+                // Calculate which logical row this symbol represents
+                const relativeY = worldY - visibleStart;
+                const row = Math.floor(relativeY / symbolSpacing);
+                visibleSymbols.push({ row, symbol: symbolAlias });
+              }
               }
             }
           if (visibleSymbols.length > 0) {
@@ -1797,6 +1887,8 @@ export default class GridRenderer {
     
     // Get current visible symbols before rebuilding
     const currentColumn = [];
+    
+    // OPTION A: Try to get from existing spin layer symbols
     if (reel.symbols && reel.symbols.length > 0) {
       // Get current visible symbols from the spin layer
       const dynamicHeight = this._getDynamicSymbolHeight(col);
@@ -1813,6 +1905,29 @@ export default class GridRenderer {
             currentColumn.push(symbolCode);
           }
         }
+      }
+    }
+    
+    // FIX: OPTION B - If Option A failed (empty spin layer), grab from GRID layer (static sprites)
+    // This is critical for when spin starts before preloadSpinResult is called
+    if (currentColumn.length === 0 && reel.gridSprites && reel.gridSprites.length > 0) {
+      console.log(`[GridRenderer] _buildReelStrip: Reel ${col} - Spin layer empty, grabbing ${reel.gridSprites.length} symbols from grid layer`);
+      // Iterate through static grid sprites to find current symbols
+      for (let j = 0; j < reel.gridSprites.length; j++) {
+        const sprite = reel.gridSprites[j];
+        if (sprite && sprite.visible && sprite.texture) {
+          const symbolCode = this._getSymbolCodeFromTexture(sprite.texture);
+          if (symbolCode) {
+            currentColumn.push(symbolCode);
+          }
+        }
+      }
+      // If we grabbed them from gridSprites (bottom-up usually), we might need to reverse depending on your array logic
+      // But usually gridSprites index 0 is bottom. The strip expects Index 0 is Top. 
+      // Let's reverse it so it matches top-to-bottom strip order.
+      if (currentColumn.length > 0) {
+        currentColumn.reverse();
+        console.log(`[GridRenderer] _buildReelStrip: Reel ${col} - Got ${currentColumn.length} symbols from grid layer:`, currentColumn);
       }
     }
     
@@ -1922,6 +2037,33 @@ export default class GridRenderer {
     reel.stripHeight = stripIndex * dynamicHeight;
     reel.stripTargetOffset = 0; // Target symbols start at index 0
     reel.stripCurrentOffset = reelHeight + randomRowsCount; // Current symbols start here
+    
+    // CRITICAL: Set container Y immediately so current symbols are visible RIGHT NOW
+    // Current symbols are at stripCurrentOffset in the strip (y = stripCurrentOffset * dynamicHeight in container space)
+    // To make them visible at maskStart in world space:
+    //   container.y + (stripCurrentOffset * dynamicHeight) = maskStart
+    //   => container.y = maskStart - (stripCurrentOffset * dynamicHeight)
+    if (reel.container) {
+      // Since mask now starts at 0, position container to show symbols from the top
+      // If no resultMatrix yet, show target symbols at top (container.y = 0)
+      // If resultMatrix exists, position to show current symbols initially
+      if (!this.resultMatrix) {
+        // Initial spin: position container at 0 to show target symbols (at y=0 in strip) at top
+        reel.container.y = 0;
+      } else {
+        // We have resultMatrix: position to show current symbols initially
+        const calculatedY = -(reel.stripCurrentOffset * dynamicHeight);
+        reel.container.y = calculatedY;
+      }
+      console.log(`[GridRenderer] _buildReelStrip: Reel ${col} - Set container Y=${reel.container.y.toFixed(1)} immediately (stripCurrentOffset=${reel.stripCurrentOffset}, dynamicHeight=${dynamicHeight.toFixed(1)}, symbolCount=${reel.symbols.length})`);
+      
+      // Verify symbols will be visible
+      if (reel.symbols.length > 0) {
+        const firstSymbolY = reel.symbols[0].y;
+        const worldY = reel.container.y + firstSymbolY;
+        console.log(`[GridRenderer] _buildReelStrip: Reel ${col} - First symbol at container y=${firstSymbolY.toFixed(1)}, world y=${worldY.toFixed(1)}`);
+      }
+    }
     
     console.log(`[GridRenderer] _buildReelStrip: Reel ${col} - Built strip with ${stripIndex} symbols (${reelHeight} target + ${randomRowsCount} random + ${currentColumn.length} current)`);
   }
@@ -2893,3 +3035,4 @@ export default class GridRenderer {
     });
   }
 }
+
