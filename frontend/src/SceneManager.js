@@ -370,12 +370,17 @@ export default class SceneManager {
         // CRITICAL: Preload result IMMEDIATELY when backend response arrives
         // This applies final textures to spinning reels DURING the spin animation
         // so they stop on the correct symbols, not random ones
-        console.log('[SceneManager] continueRenderResults: Calling preloadSpinResult IMMEDIATELY');
-        this.gridRenderer.preloadSpinResult(finalReelSymbols, this.assets);
-        if (this.topReelRenderer && topReelSymbols && topReelSymbols.length > 0) {
-          this.topReelRenderer.preloadSpinResult(topReelSymbols, this.assets);
+        // NOTE: Only call if resultMatrix doesn't exist yet (to avoid overwriting already-applied textures)
+        if (!this.gridRenderer.resultMatrix || !this.gridRenderer.isRunning()) {
+          console.log('[SceneManager] continueRenderResults: Calling preloadSpinResult IMMEDIATELY');
+          this.gridRenderer.preloadSpinResult(finalReelSymbols, this.assets);
+          if (this.topReelRenderer && topReelSymbols && topReelSymbols.length > 0) {
+            this.topReelRenderer.preloadSpinResult(topReelSymbols, this.assets);
+          }
+          console.log('[SceneManager] continueRenderResults: preloadSpinResult completed');
+        } else {
+          console.log('[SceneManager] continueRenderResults: Skipping preloadSpinResult - resultMatrix already exists and spin is running');
         }
-        console.log('[SceneManager] continueRenderResults: preloadSpinResult completed');
 
         /**
          * Shows final grid after spin completes

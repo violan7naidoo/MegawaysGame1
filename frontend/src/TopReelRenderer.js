@@ -305,6 +305,13 @@ export default class TopReelRenderer {
     const spinDistance = SPIN_BASE_TARGET + extra;
     this.targetPosition = this.position - spinDistance;
 
+    // CRITICAL: Apply textures IMMEDIATELY after targetPosition is set
+    // This ensures correct symbols are shown from the start, not random ones
+    if (this.currentSymbols && this.currentAssets) {
+      this._applyResultToTopReelSpinLayer();
+      console.log(`[TopReelRenderer] startSpin: Applied textures IMMEDIATELY with targetPosition=${this.targetPosition.toFixed(2)}`);
+    }
+
     // Create GSAP tween for horizontal animation
     if (this.spinTween) {
       this.spinTween.kill();
@@ -381,6 +388,32 @@ export default class TopReelRenderer {
 
     console.log(`[TopReelRenderer] preloadSpinResult: Received symbols from backend:`, symbols);
 
+    // CRITICAL: Don't apply textures here - wait until startSpin sets targetPosition
+    // Similar to main grid, targetPosition is calculated with random 'extra' value in startSpin
+    // So we need to wait for startSpin to set targetPosition before applying textures
+    // Just store the symbols - they will be applied in startSpin() after targetPosition is set
+    console.log('[TopReelRenderer] preloadSpinResult: Symbols stored, textures will be applied in startSpin after targetPosition is calculated');
+  }
+  
+  /**
+   * Applies final textures to top reel symbols based on targetPosition
+   * Called from startSpin() after targetPosition is set
+   * 
+   * @private
+   * @returns {void}
+   */
+  _applyResultToTopReelSpinLayer() {
+    if (!this.currentSymbols || !Array.isArray(this.currentSymbols) || this.currentSymbols.length !== this.symbolCount) {
+      return;
+    }
+    
+    if (!this.currentAssets || this.symbols.length === 0) {
+      return;
+    }
+    
+    const symbols = this.currentSymbols;
+    const assets = this.currentAssets;
+    
     // Use EXACT same approach as main grid - simple direct mapping
     // Main grid: spriteIndex = (row - Math.floor(targetPos)) % symbolCount
     // For top reel: we need to find which sprite is at visible slot k when position = targetPos
@@ -400,7 +433,7 @@ export default class TopReelRenderer {
     // Convert to "symbol units" (how many symbol widths scrolled)
     const targetPosInUnits = normalizedTarget / symbolSpacing;
     
-    console.log(`[TopReelRenderer] preloadSpinResult: targetPos=${targetPos}, targetPosInUnits=${targetPosInUnits.toFixed(2)}`);
+    console.log(`[TopReelRenderer] _applyResultToTopReelSpinLayer: targetPos=${targetPos}, targetPosInUnits=${targetPosInUnits.toFixed(2)}`);
 
     // Loop through visible slots (k = 0 to 3) - backend sends [col1, col2, col3, col4]
     // Use SAME formula pattern as main grid: spriteIndex = (slot - targetPos) % count
@@ -429,12 +462,12 @@ export default class TopReelRenderer {
           sprite.texture = texture;
           sprite.scale.set(scale);
           
-          console.log(`[TopReelRenderer] preloadSpinResult: Slot ${k} (col ${this.coversReels[k]}) -> Sprite ${spriteIndex}, Symbol ${symbolCode}, targetOffset=${targetOffset}`);
+          console.log(`[TopReelRenderer] _applyResultToTopReelSpinLayer: Slot ${k} (col ${this.coversReels[k]}) -> Sprite ${spriteIndex}, Symbol ${symbolCode}, targetOffset=${targetOffset}`);
         } else {
-          console.warn(`[TopReelRenderer] preloadSpinResult: No texture found for symbol ${symbolCode}`);
+          console.warn(`[TopReelRenderer] _applyResultToTopReelSpinLayer: No texture found for symbol ${symbolCode}`);
         }
       } else {
-        console.warn(`[TopReelRenderer] preloadSpinResult: Sprite ${spriteIndex} not available`);
+        console.warn(`[TopReelRenderer] _applyResultToTopReelSpinLayer: Sprite ${spriteIndex} not available`);
       }
     }
   }
