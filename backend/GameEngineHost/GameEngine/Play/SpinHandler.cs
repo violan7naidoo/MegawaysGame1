@@ -18,10 +18,6 @@ public sealed class SpinHandler
     private readonly ITimeService _timeService;
     private readonly FortunaPrng _fortunaPrng;
     private readonly ISpinTelemetrySink _telemetry;
-    
-    // PRESENTATION MODE: Preset spin sequence (loops 0-19)
-    private static int _presetSpinIndex = 0;
-    private static readonly object _presetSpinLock = new object();
 
     public SpinHandler(
         GameConfigurationLoader configurationLoader,
@@ -479,94 +475,7 @@ public sealed class SpinHandler
         return roll < lowWeight ? configuration.ReelLibrary.Low : configuration.ReelLibrary.High;
     }
 
-    // PRESENTATION MODE: Get preset random context (loops through 20 predefined spins)
-    private RandomContext GetPresetRandomContext(GameConfiguration configuration, int reelCount, int multiplierSeedCount)
-    {
-        // 20 predefined spin results for demo presentation
-        // Format: (ReelHeights, ReelStartSeeds, TopReelPosition, TopReelSymbolSeeds, ExpectedCascades)
-        var presets = new[]
-        {
-            // Spin 0: No win
-            (ReelHeights: new[] { 5, 3, 4, 5, 6, 2 }, ReelSeeds: new[] { 12345, 23456, 34567, 45678, 56789, 67890 }, TopReelPos: 0, TopReelSeeds: new[] { 111, 222, 333, 444 }),
-            // Spin 1: Single win, 1 cascade
-            (ReelHeights: new[] { 7, 3, 3, 7, 5, 3 }, ReelSeeds: new[] { 11234, 22345, 33456, 44567, 55678, 66789 }, TopReelPos: 1, TopReelSeeds: new[] { 555, 666, 777, 888 }),
-            // Spin 2: Multiple wins, 3 cascades
-            (ReelHeights: new[] { 4, 5, 5, 6, 3, 2 }, ReelSeeds: new[] { 10000, 20000, 30000, 40000, 50000, 60000 }, TopReelPos: 2, TopReelSeeds: new[] { 100, 200, 300, 400 }),
-            // Spin 3: No win
-            (ReelHeights: new[] { 6, 4, 4, 5, 4, 3 }, ReelSeeds: new[] { 15000, 25000, 35000, 45000, 55000, 65000 }, TopReelPos: 0, TopReelSeeds: new[] { 150, 250, 350, 450 }),
-            // Spin 4: Single win, 1 cascade
-            (ReelHeights: new[] { 3, 6, 5, 4, 5, 4 }, ReelSeeds: new[] { 17000, 27000, 37000, 47000, 57000, 67000 }, TopReelPos: 1, TopReelSeeds: new[] { 170, 270, 370, 470 }),
-            // Spin 5: Multiple wins, 4 cascades
-            (ReelHeights: new[] { 5, 5, 6, 4, 6, 3 }, ReelSeeds: new[] { 18000, 28000, 38000, 48000, 58000, 68000 }, TopReelPos: 2, TopReelSeeds: new[] { 180, 280, 380, 480 }),
-            // Spin 6: No win
-            (ReelHeights: new[] { 4, 4, 4, 4, 4, 4 }, ReelSeeds: new[] { 19000, 29000, 39000, 49000, 59000, 69000 }, TopReelPos: 3, TopReelSeeds: new[] { 190, 290, 390, 490 }),
-            // Spin 7: Single win, 1 cascade
-            (ReelHeights: new[] { 6, 3, 5, 5, 3, 5 }, ReelSeeds: new[] { 20000, 30000, 40000, 50000, 60000, 70000 }, TopReelPos: 0, TopReelSeeds: new[] { 200, 300, 400, 500 }),
-            // Spin 8: Multiple wins, 3 cascades
-            (ReelHeights: new[] { 5, 6, 4, 6, 5, 4 }, ReelSeeds: new[] { 21000, 31000, 41000, 51000, 61000, 71000 }, TopReelPos: 1, TopReelSeeds: new[] { 210, 310, 410, 510 }),
-            // Spin 9: No win
-            (ReelHeights: new[] { 3, 5, 6, 3, 6, 5 }, ReelSeeds: new[] { 22000, 32000, 42000, 52000, 62000, 72000 }, TopReelPos: 2, TopReelSeeds: new[] { 220, 320, 420, 520 }),
-            // Spin 10: Single win, 1 cascade
-            (ReelHeights: new[] { 7, 4, 3, 7, 4, 3 }, ReelSeeds: new[] { 23000, 33000, 43000, 53000, 63000, 73000 }, TopReelPos: 0, TopReelSeeds: new[] { 230, 330, 430, 530 }),
-            // Spin 11: Multiple wins, 4 cascades
-            (ReelHeights: new[] { 4, 7, 5, 4, 7, 2 }, ReelSeeds: new[] { 24000, 34000, 44000, 54000, 64000, 74000 }, TopReelPos: 1, TopReelSeeds: new[] { 240, 340, 440, 540 }),
-            // Spin 12: No win
-            (ReelHeights: new[] { 6, 5, 4, 5, 4, 6 }, ReelSeeds: new[] { 25000, 35000, 45000, 55000, 65000, 75000 }, TopReelPos: 2, TopReelSeeds: new[] { 250, 350, 450, 550 }),
-            // Spin 13: Single win, 1 cascade
-            (ReelHeights: new[] { 5, 4, 6, 3, 5, 4 }, ReelSeeds: new[] { 26000, 36000, 46000, 56000, 66000, 76000 }, TopReelPos: 3, TopReelSeeds: new[] { 260, 360, 460, 560 }),
-            // Spin 14: Multiple wins, 3 cascades
-            (ReelHeights: new[] { 3, 6, 6, 4, 6, 3 }, ReelSeeds: new[] { 27000, 37000, 47000, 57000, 67000, 77000 }, TopReelPos: 0, TopReelSeeds: new[] { 270, 370, 470, 570 }),
-            // Spin 15: No win
-            (ReelHeights: new[] { 7, 3, 5, 6, 3, 5 }, ReelSeeds: new[] { 28000, 38000, 48000, 58000, 68000, 78000 }, TopReelPos: 1, TopReelSeeds: new[] { 280, 380, 480, 580 }),
-            // Spin 16: Single win, 1 cascade
-            (ReelHeights: new[] { 4, 5, 4, 7, 5, 4 }, ReelSeeds: new[] { 29000, 39000, 49000, 59000, 69000, 79000 }, TopReelPos: 2, TopReelSeeds: new[] { 290, 390, 490, 590 }),
-            // Spin 17: Multiple wins, 4 cascades
-            (ReelHeights: new[] { 6, 4, 7, 3, 6, 2 }, ReelSeeds: new[] { 30000, 40000, 50000, 60000, 70000, 80000 }, TopReelPos: 0, TopReelSeeds: new[] { 300, 400, 500, 600 }),
-            // Spin 18: No win
-            (ReelHeights: new[] { 5, 6, 3, 5, 4, 6 }, ReelSeeds: new[] { 31000, 41000, 51000, 61000, 71000, 81000 }, TopReelPos: 1, TopReelSeeds: new[] { 310, 410, 510, 610 }),
-            // Spin 19: Single win, 1 cascade
-            (ReelHeights: new[] { 4, 4, 6, 4, 5, 3 }, ReelSeeds: new[] { 32000, 42000, 52000, 62000, 72000, 82000 }, TopReelPos: 2, TopReelSeeds: new[] { 320, 420, 520, 620 })
-        };
-
-        int currentIndex;
-        lock (_presetSpinLock)
-        {
-            currentIndex = _presetSpinIndex;
-            _presetSpinIndex = (_presetSpinIndex + 1) % presets.Length; // Loop 0-19
-        }
-
-        var preset = presets[currentIndex];
-        Console.WriteLine($"[SpinHandler] PRESENTATION MODE: Using preset spin #{currentIndex}");
-
-        // Generate multiplier seeds
-        var multiplierSeeds = Enumerable.Range(0, multiplierSeedCount)
-            .Select(i => preset.ReelSeeds[i % preset.ReelSeeds.Length] + i * 1000)
-            .ToArray();
-
-        IReadOnlyList<int>? reelHeights = null;
-        int? topReelPosition = null;
-        IReadOnlyList<int>? topReelSymbolSeeds = null;
-
-        if (configuration.Board.Megaways == true && configuration.Megaways is not null)
-        {
-            reelHeights = preset.ReelHeights;
-            
-            if (configuration.Megaways.TopReel.Enabled)
-            {
-                topReelPosition = preset.TopReelPos;
-                topReelSymbolSeeds = preset.TopReelSeeds;
-            }
-        }
-
-        return RandomContext.FromSeeds(
-            preset.ReelSeeds,
-            multiplierSeeds,
-            reelHeights,
-            topReelPosition,
-            topReelSymbolSeeds);
-    }
-
-    private Task<RandomContext> FetchRandomContext(
+    private async Task<RandomContext> FetchRandomContext(
         GameConfiguration configuration,
         IReadOnlyList<IReadOnlyList<string>> reelStrips,
         PlayRequest request,
@@ -574,20 +483,11 @@ public sealed class SpinHandler
         SpinMode spinMode,
         CancellationToken cancellationToken)
     {
-        // PRESENTATION MODE: Use preset sequence instead of RNG
-        var maxRows = configuration.Board.MaxRows ?? configuration.Board.Rows;
-        var multiplierSeedCount = configuration.Board.Megaways 
-            ? configuration.Board.Columns * maxRows 
-            : configuration.Board.Columns * configuration.Board.Rows;
-        
-        return Task.FromResult(GetPresetRandomContext(configuration, reelStrips.Count, multiplierSeedCount));
-        
-        /* ORIGINAL RNG CODE - COMMENTED OUT FOR PRESENTATION MODE
         try
         {
             var maxRows = configuration.Board.MaxRows ?? configuration.Board.Rows;
-            var multiplierSeedCount = configuration.Board.Megaways 
-                ? configuration.Board.Columns * maxRows 
+            var multiplierSeedCount = configuration.Board.Megaways
+                ? configuration.Board.Columns * maxRows
                 : configuration.Board.Columns * configuration.Board.Rows;
 
             var pools = new List<PoolRequest>
@@ -608,7 +508,6 @@ public sealed class SpinHandler
                     })
             };
 
-            // Add Megaways-specific pools
             if (configuration.Board.Megaways && configuration.Megaways is not null)
             {
                 pools.Add(new(
@@ -674,12 +573,11 @@ public sealed class SpinHandler
         catch
         {
             var maxRows = configuration.Board.MaxRows ?? configuration.Board.Rows;
-            var multiplierSeedCount = configuration.Board.Megaways 
-                ? configuration.Board.Columns * maxRows 
+            var multiplierSeedCount = configuration.Board.Megaways
+                ? configuration.Board.Columns * maxRows
                 : configuration.Board.Columns * configuration.Board.Rows;
             return RandomContext.CreateFallback(reelStrips.Count, multiplierSeedCount, _fortunaPrng, configuration);
         }
-        */
     }
 
     private static IReadOnlyList<int> GenerateReelHeights(
