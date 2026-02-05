@@ -111,23 +111,18 @@ public sealed class SpinHandler
             var reelSymbolsBefore = board.GetReelSymbols();
             
             // Get top reel symbols as codes for win evaluation
+            // CRITICAL: Use same ascending column order (CoversReels.OrderBy + GetSymbolForReel) as TopReelSymbolsBefore
+            // so console log, evaluation, and cascade payload all match and frontend receives consistent order.
             IReadOnlyList<string>? topReelSymbolsForEval = null;
-            if (board is MegawaysReelBoard megawaysBoardEval && megawaysBoardEval.TopReel is not null)
+            if (board is MegawaysReelBoard megawaysBoardEval && megawaysBoardEval.TopReel is not null && configuration.Megaways?.TopReel?.CoversReels is not null)
             {
-                // Convert top reel symbol IDs to codes
-                var topReelSymbolIds = megawaysBoardEval.TopReel.Symbols;
-                var topReelCodes = new List<string>();
-                foreach (var symbolId in topReelSymbolIds)
+                var coversReelsEval = configuration.Megaways.TopReel.CoversReels;
+                var orderedColsEval = coversReelsEval.OrderBy(c => c).ToList();
+                var topReelCodes = new List<string>(orderedColsEval.Count);
+                foreach (var col in orderedColsEval)
                 {
-                    if (configuration.SymbolMap.TryGetValue(symbolId, out var def))
-                    {
-                        topReelCodes.Add(def.Code);
-                    }
-                    else
-                    {
-                        // Fallback: use symbolId as-is if not found in map
-                        topReelCodes.Add(symbolId);
-                    }
+                    var symbolId = megawaysBoardEval.TopReel.GetSymbolForReel(col);
+                    topReelCodes.Add(configuration.SymbolMap.TryGetValue(symbolId, out var def) ? def.Code : symbolId);
                 }
                 topReelSymbolsForEval = topReelCodes;
             }
@@ -238,8 +233,8 @@ public sealed class SpinHandler
             IReadOnlyList<string>? topReelSymbolsBefore = null;
             if (board is MegawaysReelBoard megawaysBefore && megawaysBefore.TopReel is not null && configuration.Megaways?.TopReel?.CoversReels is not null)
             {
-                var coversReels = configuration.Megaways.TopReel.CoversReels;
-                var orderedCols = coversReels.OrderBy(c => c).ToList();
+                var coversReelsBefore = configuration.Megaways.TopReel.CoversReels;
+                var orderedCols = coversReelsBefore.OrderBy(c => c).ToList();
                 var list = new List<string>(orderedCols.Count);
                 foreach (var col in orderedCols)
                 {
@@ -277,8 +272,11 @@ public sealed class SpinHandler
             }
             else if (board is MegawaysReelBoard megawaysAfter && megawaysAfter.TopReel is not null && configuration.Megaways?.TopReel?.CoversReels is not null)
             {
-                var list = new List<string>();
-                foreach (var col in configuration.Megaways.TopReel.CoversReels)
+                // CRITICAL: Use same ascending column order as TopReelSymbolsBefore so frontend receives consistent [col0, col1, col2, col3]
+                var coversReelsAfter = configuration.Megaways.TopReel.CoversReels;
+                var orderedColsAfter = coversReelsAfter.OrderBy(c => c).ToList();
+                var list = new List<string>(orderedColsAfter.Count);
+                foreach (var col in orderedColsAfter)
                 {
                     var symbolId = megawaysAfter.TopReel.GetSymbolForReel(col);
                     list.Add(configuration.SymbolMap.TryGetValue(symbolId, out var def) ? def.Code : symbolId);
@@ -382,12 +380,11 @@ public sealed class SpinHandler
             
             if (megawaysBoardResult.TopReel is not null && configuration.Megaways?.TopReel?.CoversReels is not null)
             {
-                // CRITICAL FIX: Convert internal IDs (Sym1) to public Codes (FACE/BIRD)
-                // This matches the format used by the main grid
-                // Get the symbol for each covered column using GetSymbolForReel
-                // This ensures we get the correct symbol based on the top reel's position
-                var topReelCodes = new List<string>();
-                foreach (var coveredCol in configuration.Megaways.TopReel.CoversReels)
+                // CRITICAL: Use ascending column order so frontend slot index matches column (same as cascade TopReelSymbolsBefore/After)
+                var coversReelsFinal = configuration.Megaways.TopReel.CoversReels;
+                var orderedColsFinal = coversReelsFinal.OrderBy(c => c).ToList();
+                var topReelCodes = new List<string>(orderedColsFinal.Count);
+                foreach (var coveredCol in orderedColsFinal)
                 {
                     var symbolId = megawaysBoardResult.TopReel.GetSymbolForReel(coveredCol);
                     if (configuration.SymbolMap.TryGetValue(symbolId, out var def))

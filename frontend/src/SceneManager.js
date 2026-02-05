@@ -343,8 +343,10 @@ export default class SceneManager {
       this.gridRenderer.setReelHeights(reelHeights);
     }
 
-    // Update top reel symbols on BOTH renderers
-    if (topReelSymbols && topReelSymbols.length > 0) {
+    // Update top reel symbols on BOTH renderers only when there are NO cascades.
+    // When cascades exist, we set top reel from the first cascade's "before" state below.
+    const hasCascades = results.cascades && results.cascades.length > 0;
+    if (!hasCascades && topReelSymbols && topReelSymbols.length > 0) {
       // Set on TopReelRenderer (separate component)
       if (this.topReelRenderer) {
         this.topReelRenderer.setSymbols(topReelSymbols);
@@ -697,40 +699,61 @@ export default class SceneManager {
       return;
     }
 
+    // When cascades exist, reels must STOP on the INITIAL state (before first cascade),
+    // so the player sees the winning symbols (e.g. Q, Q, Q, BUFFALO) and the cascade
+    // animation highlights the correct symbols. Otherwise we'd show final state and
+    // animate "ghost" Qs.
+    let initialTopReelSymbols = results.topReelSymbols;
+    if (results.cascades && results.cascades.length > 0) {
+      const firstCascade = results.cascades[0];
+      const topReelBefore = firstCascade.topReelSymbolsBefore ?? firstCascade.TopReelSymbolsBefore;
+      if (Array.isArray(topReelBefore) && topReelBefore.length > 0) {
+        console.log('[SceneManager] preloadSpinResult: Using Cascade 0 BEFORE state for Top Reel', topReelBefore);
+        initialTopReelSymbols = topReelBefore;
+      }
+    }
+
+    // Main grid: when cascades exist, preload initial state so reels stop on "before first cascade"
+    let initialReelSymbols = results.reelSymbols;
+    if (results.cascades && results.cascades.length > 0) {
+      const firstCascade = results.cascades[0];
+      const reelsBefore = firstCascade.reelSymbolsBefore ?? firstCascade.ReelSymbolsBefore;
+      if (Array.isArray(reelsBefore) && reelsBefore.length > 0) {
+        console.log('[SceneManager] preloadSpinResult: Using Cascade 0 BEFORE state for main grid');
+        initialReelSymbols = reelsBefore;
+      }
+    }
+
     // Extract Megaways data (for variable reel heights)
     const reelHeights = results.reelHeights; // Array of heights per column
-    const topReelSymbols = results.topReelSymbols; // Symbols for horizontal top reel
-    const finalReelSymbols = results.reelSymbols; // Final grid state as jagged array
 
     // CRITICAL: Set reel heights FIRST before building/starting spin
-    // This ensures symbols are built with correct sizes from the start
     if (reelHeights && reelHeights.length > 0) {
       console.log('[SceneManager] preloadSpinResult: Setting reel heights BEFORE spin', reelHeights);
       this.gridRenderer.setReelHeights(reelHeights);
     }
 
-    // Update top reel symbols
-    if (topReelSymbols && topReelSymbols.length > 0) {
+    // Update top reel symbols with the correct initial state (so reels stop on it)
+    if (initialTopReelSymbols && initialTopReelSymbols.length > 0) {
       if (this.topReelRenderer) {
-        this.topReelRenderer.setSymbols(topReelSymbols);
+        this.topReelRenderer.setSymbols(initialTopReelSymbols);
+        this.topReelRenderer.preloadSpinResult(initialTopReelSymbols, this.assets);
       }
-      this.gridRenderer.setTopReel(topReelSymbols);
+      this.gridRenderer.setTopReel(initialTopReelSymbols);
     }
 
     // CRITICAL: Build reels with correct sizes if they don't exist yet
-    // This ensures reels are created with the right symbol sizes from the start
     if (this.gridRenderer.reels.length === 0) {
       console.log('[SceneManager] preloadSpinResult: Building reels with correct sizes');
       this.gridRenderer.buildReels(this.assets);
     }
 
-    // CRITICAL: Preload textures BEFORE spin starts
-    // This applies final textures so reels spin with correct symbols and sizes
-    if (Array.isArray(finalReelSymbols) && finalReelSymbols.length > 0) {
+    // CRITICAL: Preload textures BEFORE spin starts (initial state when cascades exist)
+    if (Array.isArray(initialReelSymbols) && initialReelSymbols.length > 0) {
       console.log('[SceneManager] preloadSpinResult: Preloading textures BEFORE spin');
-      this.gridRenderer.preloadSpinResult(finalReelSymbols, this.assets);
-      if (this.topReelRenderer && topReelSymbols && topReelSymbols.length > 0) {
-        this.topReelRenderer.preloadSpinResult(topReelSymbols, this.assets);
+      this.gridRenderer.preloadSpinResult(initialReelSymbols, this.assets);
+      if (this.topReelRenderer && initialTopReelSymbols && initialTopReelSymbols.length > 0) {
+        this.topReelRenderer.preloadSpinResult(initialTopReelSymbols, this.assets);
       }
     }
   }
