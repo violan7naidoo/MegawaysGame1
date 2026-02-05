@@ -10,12 +10,12 @@
   "megaways": {
     "enabled": true,
     "reelHeights": [
-      { "reelIndex": 0, "min": 2, "max": 7 },
-      { "reelIndex": 1, "min": 2, "max": 8 },
-      { "reelIndex": 2, "min": 2, "max": 8 },
-      { "reelIndex": 3, "min": 2, "max": 8 },
-      { "reelIndex": 4, "min": 2, "max": 8 },
-      { "reelIndex": 5, "min": 2, "max": 7 }
+      { "reelIndex": 0, "min": 2, "max": 8 },
+      { "reelIndex": 1, "min": 2, "max": 7 },
+      { "reelIndex": 2, "min": 2, "max": 7 },
+      { "reelIndex": 3, "min": 2, "max": 7 },
+      { "reelIndex": 4, "min": 2, "max": 7 },
+      { "reelIndex": 5, "min": 2, "max": 8 }
     ],
     "topReel": {
       "enabled": true,

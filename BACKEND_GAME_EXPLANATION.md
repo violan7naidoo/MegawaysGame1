@@ -160,7 +160,7 @@ This is what the frontend uses to render the grid and cascades:
 | Field | Type | Description |
 |-------|------|-------------|
 | **cascades** | Array | Each step: `index`, `reelSymbolsBefore`, `reelSymbolsAfter`, `winsAfterCascade`, `baseWin`, `appliedMultiplier`, `totalWin` |
-| **wins** | Array | All symbol wins in the round: `symbolCode`, `count`, `multiplier`, `payout`, `waysToWin` |
+| **wins** | Array | All symbol wins: `symbolCode`, `count`, `multiplier`, `payout`, `waysToWin`, **`winningPositions`** (array of `{ reel, position }` for contiguous reels only) |
 | **scatter** | Object or null | `symbolCount`, `win`, `freeSpinsAwarded` |
 | **freeSpins** | Object or null | `spinsRemaining`, `totalMultiplier`, `featureWin`, `triggeredThisSpin` |
 | **rngTransactionId** | string | Round id (e.g. for audit) |
@@ -202,7 +202,7 @@ No spin runs; the engine is not called. Config is loaded in RGS only for the **s
      - Get current reel symbols (with top reel codes for eval).
      - **WinEvaluator.EvaluateMegaways** (or traditional) → wins.
      - If no wins: break; final grid = last board state.
-     - Else: add wins to lists; apply multipliers (base game: multiplier symbols only; free spins: MULTIPLIER symbols + wild multipliers, accumulated); add to totalWin/featureWin; **remove winning symbol codes** from board (and top reel); remove multiplier symbols; refill; record cascade step; repeat.
+     - Else: add wins to lists; apply multipliers; add to totalWin/featureWin; **remove only symbols at winning positions** (`RemovePositions` from each win’s `WinningPositions`); remove multiplier symbols; refill; record cascade step; repeat.
    - After loop: **scatter evaluation** on final board (count scatter symbols); if enough, add scatter win and/or award/retrigger free spins (initialize or add spins to state).
    - Free spin state update: decrement spins remaining; clear state when 0.
    - **Max win cap**: If totalWin > bet × maxWinMultiplier, cap totalWin and (in free spins) end feature immediately.

@@ -132,8 +132,34 @@ public sealed class SpinHandler
                 topReelSymbolsForEval = topReelCodes;
             }
             
+            // Log grid state before win evaluation (for verification / debugging)
+            Console.WriteLine($"[SpinHandler] ===== CASCADE STEP {cascades.Count} - GRID BEFORE WIN EVALUATION ===== ");
+            Console.WriteLine($"[SpinHandler] ReelSymbols: {reelSymbolsBefore.Count} columns");
+            if (topReelSymbolsForEval != null)
+                Console.WriteLine($"[SpinHandler] TopReelSymbolsBefore: [{string.Join(", ", topReelSymbolsForEval)}]");
+            Console.WriteLine($"[SpinHandler] Main reels (rows 0 = bottom, top = row N-1):");
+            for (int c = 0; c < reelSymbolsBefore.Count; c++)
+            {
+                var colList = reelSymbolsBefore[c];
+                var syms = string.Join(", ", colList);
+                Console.WriteLine($"[SpinHandler]   Reel {c} (height {colList.Count}): [{syms}]");
+            }
+            Console.WriteLine($"[SpinHandler] ----------------------------------------");
+
             // Evaluate wins using jagged array structure, including top reel symbols
             var evaluation = _winEvaluator.EvaluateMegaways(reelSymbolsBefore, topReelSymbolsForEval, configuration, request.TotalBet);
+
+            if (evaluation.SymbolWins.Count > 0)
+            {
+                foreach (var sw in evaluation.SymbolWins)
+                {
+                    var posStr = sw.WinningPositions != null
+                        ? string.Join(", ", sw.WinningPositions.Select(wp => $"({wp.Reel},{(wp.Position == -1 ? "top" : wp.Position.ToString())})"))
+                        : "";
+                    Console.WriteLine($"[SpinHandler] Win: Symbol={sw.SymbolCode}, Payout={sw.Payout.Amount}, Positions: [{posStr}]");
+                }
+                Console.WriteLine($"[SpinHandler] ----------------------------------------");
+            }
 
             if (evaluation.SymbolWins.Count == 0)
             {
@@ -201,15 +227,38 @@ public sealed class SpinHandler
                 nextState.FreeSpins.FeatureWin = featureWin;
             }
 
-            var winningCodes = evaluation.SymbolWins
-                .Select(win => win.SymbolCode)
-                .ToHashSet(StringComparer.Ordinal);
+            // Remove only symbols at winning positions (contiguous reels), not all symbols of that code
+            var positionsToRemove = evaluation.SymbolWins
+                .SelectMany(win => win.WinningPositions ?? Array.Empty<WinningPosition>())
+                .Select(wp => (wp.Reel, wp.Position))
+                .ToList();
 
-            board.RemoveSymbols(winningCodes);
-            if (board is MegawaysReelBoard megawaysBoard)
+            // Capture top reel state before removal (for cascade step and frontend)
+            // CRITICAL: Build list in ascending column order (1,2,3,4) so frontend slot index matches column
+            IReadOnlyList<string>? topReelSymbolsBefore = null;
+            if (board is MegawaysReelBoard megawaysBefore && megawaysBefore.TopReel is not null && configuration.Megaways?.TopReel?.CoversReels is not null)
             {
-                megawaysBoard.RemoveTopReelSymbols(winningCodes);
+                var coversReels = configuration.Megaways.TopReel.CoversReels;
+                var orderedCols = coversReels.OrderBy(c => c).ToList();
+                var list = new List<string>(orderedCols.Count);
+                foreach (var col in orderedCols)
+                {
+                    var symbolId = megawaysBefore.TopReel.GetSymbolForReel(col);
+                    list.Add(configuration.SymbolMap.TryGetValue(symbolId, out var def) ? def.Code : symbolId);
+                }
+                topReelSymbolsBefore = list;
             }
+
+            board.RemovePositions(positionsToRemove);
+
+            // Replace winning top reel symbols with new symbols from the strip
+            var topReelReelsToReplace = positionsToRemove.Where(p => p.Position == -1).Select(p => p.Reel).Distinct().ToList();
+            if (board is MegawaysReelBoard megawaysBoard && megawaysBoard.TopReel is not null && topReelReelsToReplace.Count > 0 && configuration.Megaways?.TopReel?.CoversReels is { } coversReels)
+            {
+                var strip = reelStrips[coversReels[0]];
+                megawaysBoard.ReplaceTopReelSymbolsAtReels(topReelReelsToReplace, strip, _fortunaPrng);
+            }
+
             board.RemoveMultipliers();
 
             if (board.NeedsRefill)
@@ -219,6 +268,24 @@ public sealed class SpinHandler
 
             var reelSymbolsAfter = board.GetReelSymbols();
 
+            // Capture top reel state after removal/refill (for cascade step and frontend)
+            // When no top reel positions were removed, send the same as "before" so the frontend never shows wrong symbols
+            IReadOnlyList<string>? topReelSymbolsAfter = null;
+            if (topReelReelsToReplace.Count == 0 && topReelSymbolsBefore != null)
+            {
+                topReelSymbolsAfter = topReelSymbolsBefore;
+            }
+            else if (board is MegawaysReelBoard megawaysAfter && megawaysAfter.TopReel is not null && configuration.Megaways?.TopReel?.CoversReels is not null)
+            {
+                var list = new List<string>();
+                foreach (var col in configuration.Megaways.TopReel.CoversReels)
+                {
+                    var symbolId = megawaysAfter.TopReel.GetSymbolForReel(col);
+                    list.Add(configuration.SymbolMap.TryGetValue(symbolId, out var def) ? def.Code : symbolId);
+                }
+                topReelSymbolsAfter = list;
+            }
+
             cascades.Add(new CascadeStep(
                 Index: cascadeIndex++,
                 ReelSymbolsBefore: reelSymbolsBefore,
@@ -226,7 +293,9 @@ public sealed class SpinHandler
                 WinsAfterCascade: evaluation.SymbolWins,
                 BaseWin: cascadeBaseWin,
                 AppliedMultiplier: appliedMultiplier,
-                TotalWin: cascadeFinalWin));
+                TotalWin: cascadeFinalWin,
+                TopReelSymbolsBefore: topReelSymbolsBefore,
+                TopReelSymbolsAfter: topReelSymbolsAfter));
         }
 
         var scatterOutcome = ResolveScatterOutcome(board, configuration, request.TotalBet);
@@ -558,7 +627,10 @@ public sealed class SpinHandler
             if (configuration.Board.Megaways && configuration.Megaways is not null)
             {
                 var heightSeeds = ExtractIntegers(response, "reel-heights", configuration.Board.Columns);
-                reelHeights = GenerateReelHeights(configuration.Megaways.ReelHeights, heightSeeds, _fortunaPrng);
+                var rawHeights = GenerateReelHeights(configuration.Megaways.ReelHeights, heightSeeds, _fortunaPrng);
+                reelHeights = configuration.Megaways.TopReel.Enabled
+                    ? ClampReelHeightsForTopReel(rawHeights, configuration.Megaways.TopReel.CoversReels)
+                    : rawHeights;
 
                 if (configuration.Megaways.TopReel.Enabled)
                 {
@@ -595,6 +667,22 @@ public sealed class SpinHandler
             heights.Add(height);
         }
         return heights;
+    }
+
+    /// <summary>Clamps main-grid reel heights for columns covered by the top reel to at most 7 (top reel is the 8th row for those columns).</summary>
+    private static IReadOnlyList<int> ClampReelHeightsForTopReel(
+        IReadOnlyList<int> heights,
+        IReadOnlyList<int>? topReelCoversReels,
+        int maxMainGridForCoveredReels = 7)
+    {
+        if (topReelCoversReels == null || topReelCoversReels.Count == 0) return heights;
+        var list = new List<int>(heights);
+        foreach (var col in topReelCoversReels)
+        {
+            if (col >= 0 && col < list.Count && list[col] > maxMainGridForCoveredReels)
+                list[col] = maxMainGridForCoveredReels;
+        }
+        return list;
     }
 
     private static IReadOnlyList<int> ExtractIntegers(PoolsResponse response, string poolId, int expectedCount)
@@ -810,6 +898,23 @@ public sealed class SpinHandler
             foreach (var column in _columns)
             {
                 column.RemoveWhere(symbol => targets.Contains(symbol.Definition.Code));
+            }
+        }
+
+        /// <summary>Removes symbols only at the given (reel, row) positions. Position -1 = top reel (handled by MegawaysReelBoard if needed).</summary>
+        public virtual void RemovePositions(IEnumerable<(int Reel, int Position)> positions)
+        {
+            var mainReelPositions = positions.Where(p => p.Position >= 0 && p.Reel >= 0 && p.Reel < _columns.Count);
+            var byReel = mainReelPositions.GroupBy(p => p.Reel);
+            foreach (var g in byReel)
+            {
+                var reelIndex = g.Key;
+                var column = _columns[reelIndex];
+                var rowsToRemove = g.Select(x => x.Position).Distinct().Where(r => r >= 0 && r < column.Symbols.Count).OrderByDescending(r => r).ToList();
+                foreach (var row in rowsToRemove)
+                {
+                    column.Symbols.RemoveAt(row);
+                }
             }
         }
 
@@ -1046,15 +1151,24 @@ public sealed class SpinHandler
                 _topReel.RemoveSymbols(targets);
             }
         }
+
+        /// <summary>Replaces top reel symbols at the given reel indices with new symbols from the strip (for winning top-reel positions).</summary>
+        public void ReplaceTopReelSymbolsAtReels(IReadOnlyList<int> reelIndices, IReadOnlyList<string> strip, FortunaPrng prng)
+        {
+            if (_topReel is not null && reelIndices.Count > 0)
+            {
+                _topReel.ReplaceSymbolsForReels(reelIndices, strip, prng);
+            }
+        }
     }
 
     private sealed class TopReel
     {
-        private readonly IReadOnlyList<string> _symbols;
+        private readonly List<string> _symbols;
         private int _position;
         private readonly IReadOnlyList<int> _coversReels;
 
-        private TopReel(IReadOnlyList<string> symbols, int position, IReadOnlyList<int> coversReels)
+        private TopReel(List<string> symbols, int position, IReadOnlyList<int> coversReels)
         {
             _symbols = symbols;
             _position = position;
@@ -1063,6 +1177,13 @@ public sealed class SpinHandler
 
         public IReadOnlyList<string> Symbols => _symbols;
         public int Position => _position;
+
+        private int GetSymbolIndexForReel(int reelIndex)
+        {
+            var maxIndex = _coversReels.Max();
+            var reelOffset = maxIndex - reelIndex;
+            return (_position + reelOffset) % _symbols.Count;
+        }
 
         public static TopReel Create(
             IReadOnlyList<IReadOnlyList<string>> reelStrips,
@@ -1108,10 +1229,25 @@ public sealed class SpinHandler
             _position = newPosition;
         }
 
+        /// <summary>Replaces top reel symbols at the given reel indices with new symbols drawn from the strip (used when those positions are winning and removed).</summary>
+        public void ReplaceSymbolsForReels(IReadOnlyList<int> reelIndices, IReadOnlyList<string> strip, FortunaPrng prng)
+        {
+            if (strip.Count == 0) return;
+            foreach (var reelIndex in reelIndices)
+            {
+                if (!_coversReels.Contains(reelIndex)) continue;
+                var symbolIndex = GetSymbolIndexForReel(reelIndex);
+                var oldSymbol = _symbols[symbolIndex];
+                var newIndex = prng.NextInt32(0, strip.Count);
+                var newSymbol = strip[newIndex];
+                _symbols[symbolIndex] = newSymbol;
+                Console.WriteLine($"[SpinHandler] TopReel replace reel={reelIndex} old={oldSymbol} new={newSymbol}");
+            }
+        }
+
         public void RemoveSymbols(ISet<string> targets)
         {
-            // Top reel symbols are removed by replacing them
-            // This will be handled during cascade refill
+            // Top reel symbols are removed by ReplaceSymbolsForReels during cascade
         }
     }
 
@@ -1244,7 +1380,10 @@ public sealed class SpinHandler
                 var heightSeeds = Enumerable.Range(0, configuration.Board.Columns)
                     .Select(_ => prng.NextInt32(0, int.MaxValue))
                     .ToArray();
-                reelHeights = GenerateReelHeights(configuration.Megaways.ReelHeights, heightSeeds, prng);
+                var rawHeights = GenerateReelHeights(configuration.Megaways.ReelHeights, heightSeeds, prng);
+                reelHeights = configuration.Megaways.TopReel.Enabled
+                    ? ClampReelHeightsForTopReel(rawHeights, configuration.Megaways.TopReel.CoversReels)
+                    : rawHeights;
 
                 if (configuration.Megaways.TopReel.Enabled)
                 {

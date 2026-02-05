@@ -118,7 +118,11 @@ export default class AnimationManager {
       }
       for (let i = 0; i < cascades.length; i += 1) {
         const step = cascades[i];
-
+        // Support both camelCase (API) and PascalCase (legacy) so top reel is always correct for this step
+        const topReelBefore = step.topReelSymbolsBefore ?? step.TopReelSymbolsBefore;
+        if (Array.isArray(topReelBefore) && topReelBefore.length > 0 && typeof this.grid.setTopReel === 'function') {
+          this.grid.setTopReel(topReelBefore);
+        }
         if (Array.isArray(step.reelSymbolsBefore)) {
           this.grid.renderGridFromMatrix(step.reelSymbolsBefore, this.assets);
         }
@@ -154,33 +158,46 @@ export default class AnimationManager {
         await this._delay(postDelay);
 
         // Extract winning positions for cascade removal
-        // Backend may send indices (flat) or we need to find by symbol code
+        // Prefer backend winningPositions (exact contiguous reels), then indices, then symbol-code fallback
         const winningIndices = [];
         const winningPositions = []; // Store as {col, row} for jagged arrays
         
         (step.winsAfterCascade ?? []).forEach((win) => {
           if (!win) return;
           
-          // Try to get explicit indices first (flat array format)
+          // 1) Prefer explicit winning positions from backend (reel = col, position = row; -1 = top reel)
+          if (Array.isArray(win.winningPositions) && win.winningPositions.length > 0) {
+            win.winningPositions.forEach((p) => {
+              const col = p.reel;
+              const row = p.position;
+              if (Number.isFinite(col) && Number.isFinite(row)) {
+                winningPositions.push({ col, row });
+                if (row >= 0) {
+                  winningIndices.push(row * this.grid.columns + col);
+                }
+              }
+            });
+            return;
+          }
+          
+          // 2) Try explicit indices (flat array format)
           if (Array.isArray(win.indices)) {
             win.indices.forEach((idx) => {
               if (Number.isFinite(idx)) {
                 winningIndices.push(idx);
-                // Convert flat index to col,row for jagged array
                 const row = Math.floor(idx / this.grid.columns);
                 const col = idx % this.grid.columns;
                 winningPositions.push({ col, row });
               }
             });
+            return;
           }
           
-          // If no indices, find by symbol code in jagged array
-          if (winningIndices.length === 0 && win.symbolCode && Array.isArray(step.reelSymbolsBefore)) {
+          // 3) Fallback: find by symbol code in jagged array (may over-include non-contiguous symbols)
+          if (win.symbolCode && Array.isArray(step.reelSymbolsBefore)) {
             const targetSymbol = win.symbolCode;
             const targetCount = Number.isFinite(win.count) ? win.count : null;
             const matches = [];
-            
-            // Find all matching symbols in jagged array
             for (let col = 0; col < step.reelSymbolsBefore.length; col += 1) {
               const reel = step.reelSymbolsBefore[col];
               if (Array.isArray(reel)) {
@@ -191,10 +208,8 @@ export default class AnimationManager {
                 }
               }
             }
-            
-            // Use first N matches if count is specified
-            const positionsToUse = targetCount && matches.length > targetCount 
-              ? matches.slice(0, targetCount) 
+            const positionsToUse = targetCount && matches.length > targetCount
+              ? matches.slice(0, targetCount)
               : matches;
             winningPositions.push(...positionsToUse);
           }
@@ -208,9 +223,11 @@ export default class AnimationManager {
         if (Array.isArray(step.reelSymbolsAfter)) {
           const fadeDuration = this.isTurboMode ? CASCADE_FADE_DURATION * TURBO_MULTIPLIER : CASCADE_FADE_DURATION;
           const dropDuration = this.isTurboMode ? CASCADE_DROP_DURATION * TURBO_MULTIPLIER : CASCADE_DROP_DURATION;
+          const topReelAfter = step.topReelSymbolsAfter ?? step.TopReelSymbolsAfter ?? null;
           await this.grid.playCascadeStep(step.reelSymbolsAfter, this.assets, {
             fadeDuration: fadeDuration,
-            dropDuration: dropDuration
+            dropDuration: dropDuration,
+            topReelSymbolsAfter: Array.isArray(topReelAfter) && topReelAfter.length > 0 ? topReelAfter : null
           });
         }
       }
@@ -248,36 +265,39 @@ export default class AnimationManager {
     const winCells = []; // Array of {row, col} positions to highlight
     const wins = Array.isArray(step.winsAfterCascade) ? step.winsAfterCascade : [];
 
-    // Extract win cells from explicit indices
+    // 1) Prefer backend winningPositions (exact contiguous reels; row -1 = top reel)
     wins.forEach((win) => {
-      if (!win) {
+      if (!win) return;
+      if (Array.isArray(win.winningPositions) && win.winningPositions.length > 0) {
+        win.winningPositions.forEach((p) => {
+          const col = p.reel;
+          const row = p.position;
+          if (Number.isFinite(col) && Number.isFinite(row)) {
+            winCells.push({ row, col });
+          }
+        });
         return;
       }
-
+      // 2) Explicit flat indices
       if (Array.isArray(win.indices)) {
         win.indices.forEach((idx) => {
-          if (!Number.isFinite(idx)) {
-            return;
-          }
-          // Convert flat index to row/col
+          if (!Number.isFinite(idx)) return;
           const row = Math.floor(idx / this.grid.columns);
           const col = idx % this.grid.columns;
           winCells.push({ row, col });
         });
+        return;
       }
     });
 
-    // If no explicit indices, try to match by symbol code in jagged array
+    // 3) Fallback: match by symbol code in jagged array (may over-include)
     if (winCells.length === 0 && Array.isArray(step.reelSymbolsBefore)) {
       const reelSymbols = step.reelSymbolsBefore;
       wins.forEach((win) => {
-        if (!win?.symbolCode) {
-          return;
-        }
+        if (!win?.symbolCode) return;
         const targetSymbol = win.symbolCode;
         const targetCount = Number.isFinite(win.count) ? win.count : null;
         const matches = [];
-        // Find all matching symbols in jagged array structure
         for (let col = 0; col < reelSymbols.length; col += 1) {
           const reel = reelSymbols[col];
           if (Array.isArray(reel)) {
@@ -288,7 +308,6 @@ export default class AnimationManager {
             }
           }
         }
-        // Use first N matches if count is specified
         const indicesToUse =
           targetCount && matches.length > targetCount ? matches.slice(0, targetCount) : matches;
         winCells.push(...indicesToUse);

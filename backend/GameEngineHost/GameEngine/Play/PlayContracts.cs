@@ -51,7 +51,12 @@ public sealed record CascadeStep(
     IReadOnlyList<SymbolWin> WinsAfterCascade,
     Money BaseWin,
     decimal AppliedMultiplier,
-    Money TotalWin);
+    Money TotalWin,
+    IReadOnlyList<string>? TopReelSymbolsBefore = null,
+    IReadOnlyList<string>? TopReelSymbolsAfter = null);
+
+/// <summary>Position of a winning symbol: Reel = column index (0-based), Position = row index (0 = bottom). Use -1 for top reel.</summary>
+public sealed record WinningPosition(int Reel, int Position);
 
 public sealed record SymbolWin(
     string SymbolCode,
@@ -59,7 +64,8 @@ public sealed record SymbolWin(
     decimal Multiplier,
     Money Payout,
     IReadOnlyList<int>? Indices = null,
-    int? WaysToWin = null);
+    int? WaysToWin = null,
+    IReadOnlyList<WinningPosition>? WinningPositions = null);
 
 public sealed record ScatterOutcome(int SymbolCount, Money Win, int FreeSpinsAwarded);
 

@@ -267,13 +267,11 @@ public sealed class WinEvaluator
             }
             var payout = new Money(payoutAmount);
             
-            // Convert win positions to flat indices for compatibility (temporary)
-            var allIndices = new List<int>();
-            // Note: This is a simplified conversion - in reality, we'd need reel heights
-            // For now, we'll leave indices empty or calculate based on reel structure
-            // The frontend should use ReelSymbols structure instead
+            // Only positions on contiguous reels (allWinPositions is built until first empty reel, so already correct)
+            var winningPositionsList = allWinPositions
+                .Select(p => new WinningPosition(p.Reel, p.Position))
+                .ToList();
             
-            // Store total symbol count for display purposes (sum of all symbols across contiguous reels)
             var totalSymbolCount = symbolsPerReel.Take(contiguousReels).Sum();
             
             wins.Add(new SymbolWin(
@@ -281,8 +279,9 @@ public sealed class WinEvaluator
                 totalSymbolCount, 
                 bestMatch.Multiplier, 
                 payout, 
-                allIndices.Count > 0 ? allIndices : null, 
-                ways));
+                Indices: null, 
+                ways,
+                winningPositionsList.Count > 0 ? winningPositionsList : null));
             totalWin += payout.Amount;
         }
         

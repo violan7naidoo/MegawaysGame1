@@ -32,12 +32,17 @@ class SpinDebugLogger {
   constructor() {
     this.logs = [];
     this.startTime = null;
+    this.backendSummary = null;
   }
 
   start() {
     this.logs = [];
+    this.backendSummary = null;
     this.startTime = Date.now();
-    this.log('=== SPIN DEBUG SESSION STARTED ===');
+  }
+
+  setBackendSummary(text) {
+    this.backendSummary = text;
   }
 
   log(message, data = null) {
@@ -129,13 +134,18 @@ class SpinDebugLogger {
   }
 
   download() {
-    const content = this.logs.map(log => {
-      let line = `[${log.time}s] ${log.message}`;
-      if (log.data) {
-        line += '\n' + JSON.stringify(log.data, null, 2);
-      }
-      return line;
-    }).join('\n\n');
+    const content = this.backendSummary != null
+      ? this.backendSummary
+      : this.logs.map(log => {
+          let line = `[${log.time}s] ${log.message}`;
+          if (log.data) {
+            line += '\n' + JSON.stringify(log.data, null, 2);
+          }
+          return line;
+        }).join('\n\n');
+    if (this.backendSummary) {
+      this.backendSummary = null;
+    }
 
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -146,8 +156,6 @@ class SpinDebugLogger {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    
-    this.log('Debug log downloaded to file');
   }
 }
 
@@ -237,6 +245,8 @@ export default class GridRenderer {
     this.isSpinning = false;
     this.isCascading = false;
     this.isTurboMode = false;
+    /** When false, reelsComplete will switch to grid and render resultMatrix so display matches backend (no cascades). */
+    this.hasCascadesThisRound = false;
     this.reelHeights = null; // Array of heights per reel for Megaways
     this.topReel = null; // Top reel data (final symbols from backend)
     this.topReelContainer = null; // Container for top reel
@@ -262,6 +272,105 @@ export default class GridRenderer {
     // Symbol mapping from backend format (Sym1, Sym2, etc.) to frontend codes (FACE, BIRD, etc.)
     this.symbolMap = null; // Will be set when loading reel strips
     this.reelStrips = null; // Will store loaded reel strips
+  }
+
+  /**
+   * Builds a backend-style text summary from the play response for the spin-debug download.
+   * Supports both camelCase and PascalCase from API.
+   * @param {Object} playResponse - Full play response from backend
+   * @returns {string} Multi-line debug text (backend console style)
+   */
+  formatBackendStyleSummary(playResponse) {
+    if (!playResponse) return '';
+    const r = playResponse.results ?? playResponse;
+    const roundId = playResponse.roundId ?? playResponse.RoundId ?? '(none)';
+    const win = playResponse.win != null ? playResponse.win : playResponse.Win;
+    const winAmount = typeof win === 'number' ? win : (win?.amount ?? win?.Amount ?? 0);
+    const lines = [];
+    lines.push('=== BACKEND SPIN DEBUG (from play response) ===');
+    lines.push(`[SpinHandler] RoundId: ${roundId}`);
+    lines.push(`[SpinHandler] TotalWin: ${winAmount}`);
+    const cascades = r?.cascades ?? r?.Cascades ?? [];
+    lines.push(`[SpinHandler] Cascades: ${cascades.length}`);
+    const wins = r?.wins ?? r?.Wins ?? [];
+    lines.push(`[SpinHandler] Wins count: ${wins.length}`);
+    const topReelSymbols = r?.topReelSymbols ?? r?.TopReelSymbols;
+    if (Array.isArray(topReelSymbols) && topReelSymbols.length > 0) {
+      lines.push(`[SpinHandler] TopReelSymbols (final): [${topReelSymbols.join(', ')}]`);
+    }
+    const reelHeights = r?.reelHeights ?? r?.ReelHeights;
+    if (Array.isArray(reelHeights) && reelHeights.length > 0) {
+      lines.push(`[SpinHandler] ReelHeights: [${reelHeights.join(', ')}]`);
+    }
+    const waysToWin = r?.waysToWin ?? r?.WaysToWin;
+    if (waysToWin != null) {
+      lines.push(`[SpinHandler] WaysToWin: ${waysToWin}`);
+    }
+    const finalReels = r?.reelSymbols ?? r?.ReelSymbols;
+    if (Array.isArray(finalReels) && finalReels.length > 0) {
+      lines.push('[SpinHandler] Final reel symbols (main grid):');
+      finalReels.forEach((reel, col) => {
+        const syms = Array.isArray(reel) ? reel : [];
+        lines.push(`  Reel ${col}: [${syms.join(', ')}]`);
+      });
+    }
+    cascades.forEach((step, idx) => {
+      lines.push('');
+      lines.push(`--- CASCADE STEP ${idx} ---`);
+      const before = step.reelSymbolsBefore ?? step.ReelSymbolsBefore;
+      if (Array.isArray(before) && before.length > 0) {
+        lines.push('Main reels before:');
+        before.forEach((reel, col) => {
+          const syms = Array.isArray(reel) ? reel : [];
+          lines.push(`  Reel ${col}: [${syms.join(', ')}]`);
+        });
+      }
+      const topBefore = step.topReelSymbolsBefore ?? step.TopReelSymbolsBefore;
+      if (Array.isArray(topBefore) && topBefore.length > 0) {
+        lines.push(`TopReelSymbolsBefore: [${topBefore.join(', ')}]`);
+      }
+      const topAfter = step.topReelSymbolsAfter ?? step.TopReelSymbolsAfter;
+      if (Array.isArray(topAfter) && topAfter.length > 0) {
+        lines.push(`TopReelSymbolsAfter: [${topAfter.join(', ')}]`);
+      }
+      const stepWins = step.winsAfterCascade ?? step.WinsAfterCascade ?? [];
+      stepWins.forEach(sw => {
+        const code = sw.symbolCode ?? sw.SymbolCode ?? '?';
+        const payout = sw.payout ?? sw.Payout;
+        const amt = typeof payout === 'number' ? payout : (payout?.amount ?? payout?.Amount ?? 0);
+        const positions = sw.winningPositions ?? sw.WinningPositions ?? [];
+        const posStr = positions.map(p => {
+          const rl = p.reel ?? p.Reel;
+          const pos = p.position ?? p.Position;
+          return pos === -1 ? `(${rl},top)` : `(${rl},${pos})`;
+        }).join(', ');
+        lines.push(`[SpinHandler] Win: Symbol=${code}, Payout=${amt}, Positions: [${posStr}]`);
+      });
+    });
+    if (wins.length > 0) {
+      lines.push('');
+      lines.push('--- Aggregate wins ---');
+      wins.forEach(sw => {
+        const code = sw.symbolCode ?? sw.SymbolCode ?? '?';
+        const payout = sw.payout ?? sw.Payout;
+        const amt = typeof payout === 'number' ? payout : (payout?.amount ?? payout?.Amount ?? 0);
+        lines.push(`[SpinHandler] Win: Symbol=${code}, Payout=${amt}`);
+      });
+    }
+    lines.push('');
+    lines.push('[SpinHandler] Spin completed.');
+    return lines.join('\n');
+  }
+
+  /**
+   * Sets the last play response so the spin-debug download uses backend-style summary.
+   * Call this when results are received (e.g. from SceneManager.continueRenderResults).
+   * @param {Object} playResponse - Full play response from backend
+   */
+  setLastPlayResponseForDebug(playResponse) {
+    if (!playResponse || !this.debugLogger) return;
+    const text = this.formatBackendStyleSummary(playResponse);
+    if (text) this.debugLogger.setBackendSummary(text);
   }
 
   /**
@@ -1724,14 +1833,6 @@ export default class GridRenderer {
       // We use negative to spin downward
       targetAngle = -(angleToNextSymb + fullRotations);
       
-      this.debugLogger.log(`Reel ${reel.index}: Target angle calculation (Unity approach)`, {
-        currOrderPosition: reel.currOrderPosition,
-        nextOrderPosition: reel.nextOrderPosition,
-        angleToNextSymb: angleToNextSymb.toFixed(2),
-        fullRotations: fullRotations.toFixed(2),
-        targetAngle: targetAngle.toFixed(2),
-        currentRotationX: reel.rotationX.toFixed(2)
-      });
     } else {
       // Continuous spin - use large negative angle
       targetAngle = -reel.anglePerTileDeg * reel.symbOrder.length * spinSpeedMultiplier;
@@ -1763,48 +1864,15 @@ export default class GridRenderer {
         // CRITICAL: DO NOT apply backend symbols during spin - they should already be correct
         // from applyInitialTexturesToVisibleSymbols, and wrapping will maintain them
         
-        // Log every 10th update to avoid spam
-        if (updateCount % 10 === 0) {
-          const currentProgress = Math.abs((reel.rotationX - (reel.rotationX - targetAngle)) / targetAngle);
-          this.debugLogger.log(`Reel ${reel.index}: Spin update`, {
-            rotationX: reel.rotationX.toFixed(2),
-            delta: delta.toFixed(2),
-            progress: (currentProgress * 100).toFixed(1) + '%'
-          });
-        }
         updateCount++;
       },
       onComplete: () => {
-        this.debugLogger.log(`Reel ${reel.index}: GSAP animation onComplete called`, {
-          finalRotationX: reel.rotationX.toFixed(2),
-          targetAngle: targetAngle.toFixed(2),
-          visibleSymbolsBeforeWrap: this.debugLogger.getVisibleSymbols(reel, this.resultMatrix)
-        });
-        
-        // Final wrap to ensure all symbols are correct
         // Final wrap to ensure all symbols are correct
         // CRITICAL: Do one final wrap with the full target angle to ensure all visible symbols are correct
-        // Backend symbols should already be correct from wrapping during the spin
         this.wrapSymbolTape(reel, targetAngle, this.currentAssets);
-        
-        // CRITICAL: Set CurrOrderPosition to NextOrderPosition (Unity line 324)
-        // This ensures the reel knows it's at the target position
         reel.currOrderPosition = reel.nextOrderPosition !== -1 ? reel.nextOrderPosition : reel.currOrderPosition;
-        
         reel.topSector = ((reel.topSector + Math.abs(Math.round(targetAngle / reel.anglePerTileDeg))) % reel.tileCount + reel.tileCount) % reel.tileCount;
         reel.tempSectors = 0;
-        
-        // CRITICAL: DO NOT apply backend symbols here - they should already be correct
-        // from wrapping during the spin. Any texture change here causes visible rerendering.
-        // The wrapping uses the fixed symbOrder strip, which contains backend symbols at NextOrderPosition
-        
-        this.debugLogger.log(`Reel ${reel.index}: After final wrap`, {
-          visibleSymbols: this.debugLogger.getVisibleSymbols(reel, this.resultMatrix),
-          expectedSymbols: this.resultMatrix && this.resultMatrix[reel.index] ? this.resultMatrix[reel.index] : null,
-          currOrderPosition: reel.currOrderPosition,
-          nextOrderPosition: reel.nextOrderPosition
-        });
-        
         if (onComplete) onComplete();
       }
     });
@@ -1932,14 +2000,6 @@ export default class GridRenderer {
       }
     }
     
-    // Log jumps if detected
-    if (hasJump && this.debugLogger) {
-      this.debugLogger.log(`Reel ${reel.index}: SYMBOL JUMP DETECTED in updateReelRotation`, {
-        rotationX: reel.rotationX.toFixed(2),
-        deltaAngle: deltaAngle.toFixed(2),
-        jumps: jumps
-      });
-    }
   }
 
   /**
@@ -1965,10 +2025,8 @@ export default class GridRenderer {
       return;
     }
     
-    // Start debug logging
     this.debugLogger.start();
-    this.debugLogger.log('=== SPIN STARTED ===');
-    
+
     this.running = true;
     this.currentAssets = assets;
     this.onSpinComplete = null;
@@ -2080,17 +2138,6 @@ export default class GridRenderer {
       if (this.resultMatrix && this.resultMatrix[i] && this.resultMatrix[i].length > 0) {
         // Map backend symbols to position in fixed reel strip
         nextOrderPosition = this.mapBackendResultToOrderPosition(reel, this.resultMatrix[i], assets);
-        
-        this.debugLogger.log(`Reel ${i}: Spin starting`, {
-          backendSymbols: this.resultMatrix[i],
-          targetOrderPosition: nextOrderPosition,
-          symbolOrderLength: reel.symbOrder ? reel.symbOrder.length : 0,
-          currentRotationX: reel.rotationX,
-          currOrderPosition: reel.currOrderPosition,
-          initialVisibleSymbols: this.debugLogger.getVisibleSymbols(reel, this.resultMatrix)
-        });
-      } else {
-        this.debugLogger.log(`Reel ${i}: Spin starting (no backend symbols yet)`);
       }
       
       // Set fast spin mode if turbo
@@ -2103,12 +2150,6 @@ export default class GridRenderer {
       
       // Callback for when reel completes
       const onReelComplete = () => {
-        this.debugLogger.log(`Reel ${i}: Spin animation completed`, {
-          finalRotationX: reel.rotationX,
-          finalVisibleSymbols: this.debugLogger.getVisibleSymbols(reel, this.resultMatrix),
-          expectedSymbols: this.resultMatrix && this.resultMatrix[i] ? this.resultMatrix[i] : null
-        });
-        
         // Update megaways display as each reel stops
         this.updateMegawaysProgressive(i);
         
@@ -2125,6 +2166,11 @@ export default class GridRenderer {
     // Start top reel spinning (horizontal, right to left)
     if (this.topReelContainer && this.topReelSpinLayer && this.topReelSymbols.length > 0) {
       this.topReelSpinning = true;
+      // Ensure all strip symbols are visible for the next spin (reelsComplete may have hidden indices 4+)
+      for (let i = 0; i < this.topReelSymbols.length; i++) {
+        const s = this.topReelSymbols[i];
+        if (s && !s.destroyed) s.visible = true;
+      }
       
       // CRITICAL: Normalize current position to prevent accumulation of large negative values
       // This ensures smooth spinning on subsequent spins
@@ -2226,49 +2272,22 @@ export default class GridRenderer {
   }
 
   reelsComplete() {
-    this.debugLogger.log('=== ALL REELS COMPLETE ===');
-    
     // CRITICAL: Set isSpinning to false FIRST to prevent updateReelRotation from running
     this.running = false;
     this.isSpinning = false;
-    
-    // Ensure all reels have blur cleared and textures applied correctly
-    // Symbol positions are already correct from rotation animation (updateReelRotation)
+
     for (let i = 0; i < this.reels.length; i++) {
       const reel = this.reels[i];
       if (reel) {
-        // Clear blur
         if (reel.blur) {
           reel.blur.blurY = 0;
         }
-        
-        // CRITICAL: DO NOT apply backend symbols here - this causes jumping!
-        // The symbols should already be correct from wrapping during the spin
-        // Any texture changes here will cause visual jumps
-        
-        // Log final state AFTER position restoration
-        const visibleSymbols = this.debugLogger.getVisibleSymbols(reel, this.resultMatrix);
-        const expectedSymbols = this.resultMatrix && this.resultMatrix[i] ? this.resultMatrix[i] : null;
-        
-        this.debugLogger.log(`Reel ${i}: Final state check`, {
-          rotationX: reel.rotationX.toFixed(2),
-          visibleSymbols: visibleSymbols.map(s => `${s.symbol}@y${s.y}`),
-          expectedSymbols: expectedSymbols,
-          match: expectedSymbols && visibleSymbols.length === expectedSymbols.length && 
-                 visibleSymbols.every((s, idx) => s.symbol === expectedSymbols[idx])
-        });
-        
-        // Textures should already be applied during spin via symbol wrapping
-        // Only verify they're correct, don't reload them
-        // This prevents texture reload issues
         if (this.resultMatrix && this.resultMatrix[i] && this.currentAssets) {
           reel.finalTexturesApplied = true;
         }
       }
     }
-    
-    this.debugLogger.log('=== SPIN COMPLETE - DOWNLOADING DEBUG LOG ===');
-    // Download debug log after a short delay to ensure all logs are captured
+
     setTimeout(() => {
       this.debugLogger.download();
     }, 500);
@@ -2320,19 +2339,52 @@ export default class GridRenderer {
         symbol.x = symbolX;
       }
       
-      // Final textures should already be applied by preloadSpinResult
-      // Just ensure the visible symbols (first 4) are positioned correctly above their reels
-      for (let i = 0; i < topReelCovers.length && i < this.topReelSymbols.length; i++) {
-        const symbol = this.topReelSymbols[i];
-        if (symbol && !symbol.destroyed) {
-          // Position symbol centered above its reel
-          const col = topReelCovers[i];
-          symbol.x = col * this.reelWidth + (this.reelWidth / 2) - (symbol.width / 2);
-          symbol.y = Math.round((this.symbolSize - symbol.height) / 2);
+      // CRITICAL: Apply backend top reel symbols when spin completes
+      // this.topReel is set from results.topReelSymbols (e.g. [A, A, MOOSE, J])
+      // The 4 visible slots above columns 1-4 must show exactly these symbols
+      const assets = this.currentAssets;
+      if (this.topReel && Array.isArray(this.topReel) && this.topReel.length >= 4 && assets) {
+        for (let i = 0; i < this.topReelSymbols.length; i++) {
+          const symbol = this.topReelSymbols[i];
+          if (!symbol || symbol.destroyed) continue;
+          if (i < topReelCovers.length) {
+            const symbolCode = this.topReel[i];
+            const texture = symbolCode ? assets.get(symbolCode) : null;
+            if (texture) {
+              symbol.texture = texture;
+              const scale = Math.min(
+                this.symbolSize / texture.width,
+                this.symbolSize / texture.height
+              );
+              symbol.scale.set(scale);
+            }
+            const col = topReelCovers[i];
+            symbol.x = col * this.reelWidth + (this.reelWidth / 2) - (symbol.width / 2);
+            symbol.y = Math.round((this.symbolSize - symbol.height) / 2);
+            symbol.visible = true;
+          } else {
+            symbol.visible = false;
+          }
+        }
+      } else {
+        for (let i = 0; i < topReelCovers.length && i < this.topReelSymbols.length; i++) {
+          const symbol = this.topReelSymbols[i];
+          if (symbol && !symbol.destroyed) {
+            const col = topReelCovers[i];
+            symbol.x = col * this.reelWidth + (this.reelWidth / 2) - (symbol.width / 2);
+            symbol.y = Math.round((this.symbolSize - symbol.height) / 2);
+          }
         }
       }
     }
-    
+
+    // Option A: When there are no cascades, strip search may have failed so reels stopped at wrong position.
+    // Switch to grid mode and render backend result so final display always matches backend.
+    if (!this.hasCascadesThisRound && this.resultMatrix && this.currentAssets && Array.isArray(this.resultMatrix) && this.resultMatrix.length >= this.columns) {
+      this.enterGridMode();
+      this.renderGridFromMatrix(this.resultMatrix, this.currentAssets);
+    }
+
     this._notifySpinComplete();
   }
 
@@ -3232,7 +3284,7 @@ export default class GridRenderer {
   playCascadeStep(
     nextReelSymbols,
     assets,
-    { fadeDuration = CASCADE_FADE_DURATION, dropDuration = CASCADE_DROP_DURATION } = {}
+    { fadeDuration = CASCADE_FADE_DURATION, dropDuration = CASCADE_DROP_DURATION, topReelSymbolsAfter = null } = {}
   ) {
     // nextReelSymbols is now a jagged array: nextReelSymbols[column][row]
     if (!nextReelSymbols || !Array.isArray(nextReelSymbols) || nextReelSymbols.length < this.columns) {
@@ -3252,6 +3304,9 @@ export default class GridRenderer {
     const prevReelSymbols = this.resultMatrix; // Already jagged array
     const removedPositions = new Set(); // Store as "col,row" strings
     
+    // Track top reel cols to remove (row === -1) separately for fade + refill
+    const topReelRemovedCols = new Set();
+
     // CRITICAL: Use pendingWinningPositions if available (from highlightWins)
     // This tells us exactly which symbols are winning and should be removed
     if (this.pendingWinningPositions && Array.isArray(this.pendingWinningPositions) && this.pendingWinningPositions.length > 0) {
@@ -3260,6 +3315,10 @@ export default class GridRenderer {
         if (pos && Number.isFinite(pos.col) && Number.isFinite(pos.row)) {
           const col = pos.col;
           const row = pos.row;
+          if (row === -1) {
+            topReelRemovedCols.add(col);
+            return;
+          }
           // Verify this position exists in the jagged array
           if (col >= 0 && col < prevReelSymbols.length) {
             const reel = prevReelSymbols[col];
@@ -3269,7 +3328,7 @@ export default class GridRenderer {
           }
         }
       });
-      console.log(`[GridRenderer] playCascadeStep: Using pendingWinningPositions - ${this.pendingWinningPositions.length} positions`);
+      console.log(`[GridRenderer] playCascadeStep: Using pendingWinningPositions - ${this.pendingWinningPositions.length} positions, topReel cols:`, Array.from(topReelRemovedCols));
     } else if (this.pendingWinningIndices && Array.isArray(this.pendingWinningIndices) && this.pendingWinningIndices.length > 0) {
       // Fallback: Convert flat indices to jagged array positions
       this.pendingWinningIndices.forEach((flatIdx) => {
@@ -3311,6 +3370,38 @@ export default class GridRenderer {
     console.log(`[GridRenderer] playCascadeStep: Found ${removedPositions.size} symbols to remove:`, Array.from(removedPositions));
 
     const fadePromises = [];
+
+    // Fade top reel winning slots (row === -1)
+    const topReelCoversList = [1, 2, 3, 4];
+    topReelRemovedCols.forEach((col) => {
+      const sprite = this.getSpriteAt(-1, col);
+      if (!sprite || sprite.destroyed) return;
+      fadePromises.push(
+        new Promise((resolve) => {
+          const originalScale = sprite.scale.x;
+          gsap.to(sprite.scale, {
+            x: originalScale * 1.15,
+            y: originalScale * 1.15,
+            duration: 0.1,
+            ease: 'power2.out',
+            onComplete: () => {
+              gsap.to(sprite, {
+                alpha: 0,
+                duration: (typeof fadeDuration === 'number' ? fadeDuration : 0.5) * 0.4,
+                ease: 'power2.in',
+                onComplete: () => {
+                  sprite.visible = false;
+                  sprite.alpha = 0;
+                  sprite.scale.set(originalScale, originalScale);
+                  resolve();
+                }
+              });
+            }
+          });
+        })
+      );
+    });
+
     removedPositions.forEach((pos) => {
       const [colStr, rowStr] = pos.split(',');
       const col = parseInt(colStr, 10);
@@ -3598,6 +3689,25 @@ export default class GridRenderer {
             }
           }
           this.lastSymbolMatrix = flattened;
+
+          // Apply new top reel symbols after cascade (winning top reel slots were faded and refilled)
+          if (Array.isArray(topReelSymbolsAfter) && topReelSymbolsAfter.length >= 4 && this.topReelSymbols && this.topReelSymbols.length >= 4 && assets) {
+            this.setTopReel(topReelSymbolsAfter);
+            const topReelCoversApply = [1, 2, 3, 4];
+            for (let i = 0; i < topReelCoversApply.length && i < this.topReelSymbols.length; i++) {
+              const symbolCode = topReelSymbolsAfter[i];
+              const texture = assets.get(symbolCode) ?? assets.get('PLACEHOLDER');
+              const symbol = this.topReelSymbols[i];
+              if (texture && symbol && !symbol.destroyed) {
+                symbol.texture = texture;
+                const scale = Math.min(this.symbolSize / texture.width, this.symbolSize / texture.height);
+                symbol.scale.set(scale);
+                symbol.visible = true;
+                symbol.alpha = 1;
+              }
+            }
+          }
+
           this.pendingWinningIndices = null;
           this.pendingWinningPositions = null;
         });
@@ -3726,18 +3836,23 @@ export default class GridRenderer {
   }
 
   getSpriteAt(row, col) {
-    if (
-      typeof row !== 'number' ||
-      typeof col !== 'number' ||
-      row < 0 ||
-      col < 0 ||
-      col >= this.columns
-    ) {
+    if (typeof row !== 'number' || typeof col !== 'number' || col < 0 || col >= this.columns) {
+      return null;
+    }
+
+    // Top reel: row === -1 means top reel slot at this column (cols 1–4)
+    const topReelCovers = [1, 2, 3, 4];
+    if (row === -1 && topReelCovers.includes(col) && this.topReelSymbols && this.topReelSymbols.length >= 4) {
+      const idx = topReelCovers.indexOf(col);
+      const sprite = this.topReelSymbols[idx];
+      return sprite && !sprite.destroyed ? sprite : null;
+    }
+
+    if (row < 0) {
       return null;
     }
     
     // For Megaways, check against actual reel height for this column
-    const topReelCovers = [1, 2, 3, 4];
     let maxRowForCol = this.maxRows;
     if (this.reelHeights && this.reelHeights[col]) {
       maxRowForCol = this.reelHeights[col];

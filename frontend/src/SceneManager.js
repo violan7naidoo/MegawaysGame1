@@ -328,6 +328,10 @@ export default class SceneManager {
       return;
     }
 
+    if (playResponse) {
+      this.gridRenderer.setLastPlayResponseForDebug(playResponse);
+    }
+
     // Extract Megaways data (for variable reel heights)
     const reelHeights = results.reelHeights; // Array of heights per column
     const topReelSymbols = results.topReelSymbols; // Symbols for horizontal top reel
@@ -368,6 +372,11 @@ export default class SceneManager {
     // Extract cascade data
     const cascades = results.cascades ?? []; // Array of cascade steps
     const finalReelSymbols = results.reelSymbols; // Final grid state as jagged array (if no cascades)
+
+    // Tell grid whether this round has cascades (so reelsComplete can fix display when there are none)
+    if (this.gridRenderer) {
+      this.gridRenderer.hasCascadesThisRound = cascades.length > 0;
+    }
 
     // No cascades - just show final grid
     if (!cascades.length) {
@@ -437,12 +446,26 @@ export default class SceneManager {
     // Cascades exist - animate them step by step
     const firstCascade = cascades[0];
 
+    // Use first cascade's "before" state for initial display so top reel matches the grid we evaluate
+    const firstTopReelBefore = firstCascade.topReelSymbolsBefore ?? firstCascade.TopReelSymbolsBefore;
+    const initialTopReel = (Array.isArray(firstTopReelBefore) && firstTopReelBefore.length > 0)
+      ? firstTopReelBefore
+      : topReelSymbols;
+    if (initialTopReel && initialTopReel.length > 0) {
+      this.gridRenderer.setTopReel(initialTopReel);
+      if (this.topReelRenderer) {
+        this.topReelRenderer.setSymbols(initialTopReel);
+      }
+    }
+
     // Preload first cascade result immediately so textures are applied during spin
     // This prevents texture flicker when reels stop
     if (Array.isArray(firstCascade.reelSymbolsBefore)) {
       this.gridRenderer.preloadSpinResult(firstCascade.reelSymbolsBefore, this.assets);
     }
-    // Top reel symbols are handled separately in cascade steps
+    if (this.topReelRenderer && initialTopReel && initialTopReel.length > 0) {
+      this.topReelRenderer.preloadSpinResult(initialTopReel, this.assets);
+    }
 
     /**
      * Starts cascade animation sequence

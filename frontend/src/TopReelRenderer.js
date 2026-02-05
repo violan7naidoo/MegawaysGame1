@@ -297,6 +297,11 @@ export default class TopReelRenderer {
     if (this.symbols.length === 0) {
       this.buildSymbols(assets);
     }
+    // Ensure all strip symbols are visible for the next spin (_applyFinalTopReelSymbols may have hidden indices 4+)
+    for (let i = 0; i < this.symbols.length; i++) {
+      const s = this.symbols[i];
+      if (s && !s.destroyed) s.visible = true;
+    }
 
     // Calculate target position for horizontal spin (right to left = negative movement)
     const extra = Math.floor(Math.random() * 3);
@@ -328,8 +333,48 @@ export default class TopReelRenderer {
         if (this.blur) {
           this.blur.blurX = 0;
         }
+        // CRITICAL: Apply backend top reel symbols when spin completes
+        // Ensures the 4 visible slots show exactly currentSymbols from backend (e.g. [A, A, MOOSE, J])
+        this._applyFinalTopReelSymbols();
       }
     });
+  }
+
+  /**
+   * Applies backend top reel symbols to the 4 visible slots when spin completes.
+   * Ensures display matches results.topReelSymbols from backend.
+   * @private
+   */
+  _applyFinalTopReelSymbols() {
+    if (!this.currentSymbols || !Array.isArray(this.currentSymbols) || this.currentSymbols.length < this.symbolCount) {
+      return;
+    }
+    if (!this.currentAssets || this.symbols.length < this.symbolCount) {
+      return;
+    }
+    const assets = this.currentAssets;
+    for (let i = 0; i < this.symbols.length; i++) {
+      const sprite = this.symbols[i];
+      if (!sprite || sprite.destroyed) continue;
+      if (i < this.symbolCount && i < this.currentSymbols.length) {
+        const symbolCode = this.currentSymbols[i];
+        const texture = symbolCode ? (assets.get(symbolCode) ?? assets.get('PLACEHOLDER')) : null;
+        if (texture) {
+          sprite.texture = texture;
+          const scale = Math.min(
+            this.symbolSize / texture.width,
+            this.symbolSize / texture.height
+          );
+          sprite.scale.set(scale);
+        }
+        const col = this.coversReels[i];
+        sprite.x = col * this.reelWidth + (this.reelWidth / 2) - (sprite.width / 2);
+        sprite.y = Math.round((this.symbolSize - sprite.height) / 2);
+        sprite.visible = true;
+      } else {
+        sprite.visible = false;
+      }
+    }
   }
 
   /**
